@@ -1,0 +1,161 @@
+:root {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --text: #18212f;
+  --muted: #6f7d90;
+  --line: #d8e0ea;
+  --brand: #006e8a;
+  --danger: #b42318;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at top right, #dbe7f2 0%, var(--bg) 40%, #eef2f7 100%);
+}
+
+header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.status {
+  padding: 10px 20px;
+  font-weight: 600;
+}
+
+.status.up {
+  background: #d3f9d8;
+  color: #1f6a2f;
+}
+
+.status.down {
+  background: #ffe0db;
+  color: var(--danger);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  padding: 16px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.row.between {
+  justify-content: space-between;
+}
+
+input,
+button {
+  border: 1px solid #bbc7d6;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.92rem;
+}
+
+button {
+  cursor: pointer;
+  background: #f4fbfd;
+}
+
+button:hover {
+  background: #e6f7fb;
+}
+
+.metric-list {
+  max-height: 68vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+.metric-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: #fff;
+}
+
+.metric-item.active {
+  background: #dff4fb;
+  color: #014b61;
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.table-wrap {
+  overflow: auto;
+  max-height: 280px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+canvas {
+  width: 100%;
+  max-height: 340px;
+}
+
+.hidden {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-list {
+    max-height: 260px;
+  }
+}

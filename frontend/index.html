@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Node Metrics Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script src="config.js"></script>
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <div id="serverStatus" class="status down">Server is down</div>
+
+    <header>
+      <h1>Node Exporter Dashboard</h1>
+      <p>Realtime from InfluxDB (via backend API) + historical from GitHub raw JSON</p>
+    </header>
+
+    <main class="layout">
+      <aside>
+        <div class="panel">
+          <h2>Metrics</h2>
+          <div class="row">
+            <input id="metricPrefix" placeholder="Metric prefix" />
+            <button id="reloadMetrics">Reload</button>
+          </div>
+          <div id="metricCount" class="muted">-</div>
+          <div id="metricList" class="metric-list"></div>
+        </div>
+      </aside>
+
+      <section>
+        <div class="panel">
+          <div class="row between">
+            <h2 id="selectedMetric">Select a metric</h2>
+            <div class="muted" id="lastRefresh">-</div>
+          </div>
+          <div id="latestSummary" class="muted">No metric selected.</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tags</th>
+                  <th>Latest Value</th>
+                  <th>Timestamp</th>
+                </tr>
+              </thead>
+              <tbody id="latestRows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Realtime (last 1 hour)</h2>
+          <canvas id="realtimeChart"></canvas>
+          <div id="realtimeEmpty" class="muted hidden">No realtime data.</div>
+        </div>
+
+        <div class="panel">
+          <div class="row between">
+            <h2>Historical (GitHub raw)</h2>
+            <div class="row">
+              <input id="historyDate" type="date" />
+              <button id="loadHistory">Load</button>
+            </div>
+          </div>
+          <canvas id="historyChart"></canvas>
+          <div id="historyMessage" class="muted">Pick a metric, then load a date.</div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

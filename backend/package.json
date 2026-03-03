@@ -1,0 +1,13 @@
+{
+  "name": "metrics-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HTTP API for InfluxDB metrics",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
