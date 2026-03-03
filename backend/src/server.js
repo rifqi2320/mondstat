@@ -138,6 +138,143 @@ app.get('/api/dashboard/node-latest', async (req, res) => {
   }
 });
 
+app.get('/api/dashboard/system', async (req, res) => {
+  try {
+    const lookback = (req.query.lookback || '1h').toString();
+    const interval = (req.query.interval || '30s').toString();
+
+    validateDuration(lookback, 'lookback');
+    validateDuration(interval, 'interval');
+
+    const lookbackMs = durationToMs(lookback);
+    if (lookbackMs <= 0) {
+      throw new Error('Invalid lookback duration.');
+    }
+
+    const toMs = Date.now();
+    const fromMs = toMs - lookbackMs;
+    const fromIso = new Date(fromMs).toISOString();
+    const toIso = new Date(toMs).toISOString();
+
+    const cpuQuery = [
+      'SELECT (100 - (MEAN("idle_rate") * 100)) AS value',
+      'FROM (',
+      'SELECT NON_NEGATIVE_DERIVATIVE(MEAN("value"), 1s) AS idle_rate',
+      'FROM "node_cpu_seconds_total"',
+      `WHERE "mode"='idle' AND time >= '${fromIso}' AND time <= '${toIso}'`,
+      `GROUP BY time(${interval}), "instance", "cpu" fill(none)`,
+      ')',
+      `GROUP BY time(${interval}) fill(none)`
+    ].join(' ');
+
+    const networkRxQuery = [
+      'SELECT SUM("rate") AS value',
+      'FROM (',
+      'SELECT NON_NEGATIVE_DERIVATIVE(MEAN("value"), 1s) AS rate',
+      'FROM "node_network_receive_bytes_total"',
+      `WHERE "device" !~ /^(lo|veth.*|docker.*|br-.*|cni.*)$/ AND time >= '${fromIso}' AND time <= '${toIso}'`,
+      `GROUP BY time(${interval}), "instance", "device" fill(none)`,
+      ')',
+      `GROUP BY time(${interval}) fill(none)`
+    ].join(' ');
+
+    const networkTxQuery = [
+      'SELECT SUM("rate") AS value',
+      'FROM (',
+      'SELECT NON_NEGATIVE_DERIVATIVE(MEAN("value"), 1s) AS rate',
+      'FROM "node_network_transmit_bytes_total"',
+      `WHERE "device" !~ /^(lo|veth.*|docker.*|br-.*|cni.*)$/ AND time >= '${fromIso}' AND time <= '${toIso}'`,
+      `GROUP BY time(${interval}), "instance", "device" fill(none)`,
+      ')',
+      `GROUP BY time(${interval}) fill(none)`
+    ].join(' ');
+
+    const memTotalQuery = [
+      'SELECT SUM("value") AS value',
+      'FROM "node_memory_MemTotal_bytes"',
+      `WHERE time >= '${fromIso}' AND time <= '${toIso}'`,
+      `GROUP BY time(${interval}) fill(none)`
+    ].join(' ');
+
+    const memAvailQuery = [
+      'SELECT SUM("value") AS value',
+      'FROM "node_memory_MemAvailable_bytes"',
+      `WHERE time >= '${fromIso}' AND time <= '${toIso}'`,
+      `GROUP BY time(${interval}) fill(none)`
+    ].join(' ');
+
+    const diskSizeQuery = [
+      'SELECT SUM("value") AS value',
+      'FROM "node_filesystem_size_bytes"',
+      `WHERE "fstype" !~ /^(tmpfs|overlay|squashfs|ramfs|nsfs)$/`,
+      `AND "mountpoint" !~ /^\\/(sys|proc|dev|run)($|\\/)/`,
+      `AND time >= '${fromIso}' AND time <= '${toIso}'`,
+      `GROUP BY time(${interval}) fill(none)`
+    ].join(' ');
+
+    const diskAvailQuery = [
+      'SELECT SUM("value") AS value',
+      'FROM "node_filesystem_avail_bytes"',
+      `WHERE "fstype" !~ /^(tmpfs|overlay|squashfs|ramfs|nsfs)$/`,
+      `AND "mountpoint" !~ /^\\/(sys|proc|dev|run)($|\\/)/`,
+      `AND time >= '${fromIso}' AND time <= '${toIso}'`,
+      `GROUP BY time(${interval}) fill(none)`
+    ].join(' ');
+
+    const [cpuRaw, netInRaw, netOutRaw, memTotalRaw, memAvailRaw, diskSizeRaw, diskAvailRaw] = await Promise.all([
+      queryValueSeries(cpuQuery),
+      queryValueSeries(networkRxQuery),
+      queryValueSeries(networkTxQuery),
+      queryValueSeries(memTotalQuery),
+      queryValueSeries(memAvailQuery),
+      queryValueSeries(diskSizeQuery),
+      queryValueSeries(diskAvailQuery)
+    ]);
+
+    const cpuMap = mapFromPoints(cpuRaw, (value) => clampNumber(value, 0, 100));
+    const memTotalMap = mapFromPoints(memTotalRaw);
+    const memAvailMap = mapFromPoints(memAvailRaw);
+    const diskSizeMap = mapFromPoints(diskSizeRaw);
+    const diskAvailMap = mapFromPoints(diskAvailRaw);
+    const netInMbpsMap = mapFromPoints(netInRaw, (value) => (value * 8) / 1_000_000);
+    const netOutMbpsMap = mapFromPoints(netOutRaw, (value) => (value * 8) / 1_000_000);
+
+    const memUsageMap = ratioUsageMap(memTotalMap, memAvailMap);
+    const diskUsageMap = ratioUsageMap(diskSizeMap, diskAvailMap);
+
+    const times = sortedTimeUnion([cpuMap, memUsageMap, diskUsageMap, netInMbpsMap, netOutMbpsMap]);
+    const series = times.map((time) => ({
+      time,
+      cpu_percent: numOrNull(cpuMap.get(time)),
+      memory_percent: numOrNull(memUsageMap.get(time)),
+      disk_percent: numOrNull(diskUsageMap.get(time)),
+      network_ingress_mbps: numOrNull(netInMbpsMap.get(time)),
+      network_egress_mbps: numOrNull(netOutMbpsMap.get(time))
+    }));
+
+    const latest = {
+      cpu_percent: latestValue(cpuMap),
+      memory_percent: latestValue(memUsageMap),
+      disk_percent: latestValue(diskUsageMap),
+      network_ingress_mbps: latestValue(netInMbpsMap),
+      network_egress_mbps: latestValue(netOutMbpsMap),
+      updated_at: latestTimestampIso([cpuMap, memUsageMap, diskUsageMap, netInMbpsMap, netOutMbpsMap])
+    };
+
+    return res.json({
+      from: fromIso,
+      to: toIso,
+      lookback,
+      interval,
+      latest,
+      series
+    });
+  } catch (error) {
+    const status = /invalid/i.test(error.message) ? 400 : 500;
+    return res.status(status).json({ error: error.message });
+  }
+});
+
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
@@ -200,6 +337,33 @@ async function influxQuery(query) {
   return payload;
 }
 
+async function queryValueSeries(query) {
+  const result = await influxQuery(query);
+  const rawSeries = result?.results?.[0]?.series || [];
+  const byTime = new Map();
+
+  for (const series of rawSeries) {
+    const timeIndex = series.columns.indexOf('time');
+    const valueIndex = series.columns.indexOf('value');
+    if (timeIndex < 0 || valueIndex < 0) {
+      continue;
+    }
+
+    for (const row of series.values || []) {
+      const time = Number(row[timeIndex]);
+      const value = Number(row[valueIndex]);
+      if (!Number.isFinite(time) || !Number.isFinite(value)) {
+        continue;
+      }
+      byTime.set(time, value);
+    }
+  }
+
+  return Array.from(byTime.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([time, value]) => ({ time, value }));
+}
+
 function corsMiddleware(req, res, next) {
   const requestOrigin = req.headers.origin;
 
@@ -253,6 +417,95 @@ function clampInt(value, fallback, min, max) {
 
 function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function durationToMs(value) {
+  const match = /^(\d+)(ms|s|m|h|d|w)$/.exec(String(value));
+  if (!match) {
+    return 0;
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2];
+  const multipliers = {
+    ms: 1,
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+    w: 7 * 24 * 60 * 60 * 1000
+  };
+
+  return amount * multipliers[unit];
+}
+
+function mapFromPoints(points, mapper = (value) => value) {
+  const map = new Map();
+  for (const point of points) {
+    const value = mapper(point.value);
+    if (Number.isFinite(value)) {
+      map.set(point.time, value);
+    }
+  }
+  return map;
+}
+
+function ratioUsageMap(totalMap, availableMap) {
+  const out = new Map();
+  for (const [time, total] of totalMap.entries()) {
+    const available = availableMap.get(time);
+    if (!Number.isFinite(total) || !Number.isFinite(available) || total <= 0) {
+      continue;
+    }
+    out.set(time, clampNumber((1 - available / total) * 100, 0, 100));
+  }
+  return out;
+}
+
+function sortedTimeUnion(maps) {
+  const set = new Set();
+  for (const map of maps) {
+    for (const time of map.keys()) {
+      set.add(time);
+    }
+  }
+  return Array.from(set).sort((a, b) => a - b);
+}
+
+function latestValue(map) {
+  let time = null;
+  let value = null;
+  for (const [candidateTime, candidateValue] of map.entries()) {
+    if (time === null || candidateTime > time) {
+      time = candidateTime;
+      value = candidateValue;
+    }
+  }
+  return numOrNull(value);
+}
+
+function latestTimestampIso(maps) {
+  let latest = null;
+  for (const map of maps) {
+    for (const time of map.keys()) {
+      if (latest === null || time > latest) {
+        latest = time;
+      }
+    }
+  }
+
+  return latest === null ? null : new Date(latest).toISOString();
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function numOrNull(value) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return Number(value.toFixed(3));
 }
 
 function isOriginAllowed(origin) {

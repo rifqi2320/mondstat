@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Node Metrics Dashboard</title>
+    <title>System Metrics Dashboard</title>
     <link rel="stylesheet" href="styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="config.js"></script>
@@ -13,61 +13,58 @@
     <div id="serverStatus" class="status down">Server is down</div>
 
     <header>
-      <h1>Node Exporter Dashboard</h1>
-      <p>Realtime from InfluxDB (via backend API) + historical from GitHub raw JSON</p>
+      <h1>System Metrics Dashboard</h1>
+      <p>CPU, Memory, Disk, and Network from backend realtime + GitHub daily history</p>
     </header>
 
     <main class="layout">
-      <aside>
-        <div class="panel">
-          <h2>Metrics</h2>
-          <div class="row">
-            <input id="metricPrefix" placeholder="Metric prefix" />
-            <button id="reloadMetrics">Reload</button>
-          </div>
-          <div id="metricCount" class="muted">-</div>
-          <div id="metricList" class="metric-list"></div>
-        </div>
-      </aside>
+      <section class="cards">
+        <article class="metric-card">
+          <h2>CPU Usage</h2>
+          <div id="cpuValue" class="value">--%</div>
+        </article>
 
-      <section>
-        <div class="panel">
-          <div class="row between">
-            <h2 id="selectedMetric">Select a metric</h2>
-            <div class="muted" id="lastRefresh">-</div>
-          </div>
-          <div id="latestSummary" class="muted">No metric selected.</div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Tags</th>
-                  <th>Latest Value</th>
-                  <th>Timestamp</th>
-                </tr>
-              </thead>
-              <tbody id="latestRows"></tbody>
-            </table>
-          </div>
-        </div>
+        <article class="metric-card">
+          <h2>Memory Usage</h2>
+          <div id="memoryValue" class="value">--%</div>
+        </article>
 
-        <div class="panel">
+        <article class="metric-card">
+          <h2>Disk Usage</h2>
+          <div id="diskValue" class="value">--%</div>
+        </article>
+
+        <article class="metric-card">
+          <h2>Ingress Bandwidth</h2>
+          <div id="ingressValue" class="value">-- Mbps</div>
+        </article>
+
+        <article class="metric-card">
+          <h2>Egress Bandwidth</h2>
+          <div id="egressValue" class="value">-- Mbps</div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="row between">
           <h2>Realtime (last 1 hour)</h2>
-          <canvas id="realtimeChart"></canvas>
-          <div id="realtimeEmpty" class="muted hidden">No realtime data.</div>
+          <div id="lastRefresh" class="muted">-</div>
         </div>
+        <canvas id="realtimePercentChart"></canvas>
+        <canvas id="realtimeBandwidthChart"></canvas>
+      </section>
 
-        <div class="panel">
-          <div class="row between">
-            <h2>Historical (GitHub raw)</h2>
-            <div class="row">
-              <input id="historyDate" type="date" />
-              <button id="loadHistory">Load</button>
-            </div>
+      <section class="panel">
+        <div class="row between wrap">
+          <h2>Historical (GitHub Raw)</h2>
+          <div class="row">
+            <input id="historyDate" type="date" />
+            <button id="loadHistory">Load History</button>
           </div>
-          <canvas id="historyChart"></canvas>
-          <div id="historyMessage" class="muted">Pick a metric, then load a date.</div>
         </div>
+        <canvas id="historyPercentChart"></canvas>
+        <canvas id="historyBandwidthChart"></canvas>
+        <div id="historyMessage" class="muted">Select date and load history.</div>
       </section>
     </main>
   </body>

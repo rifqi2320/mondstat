@@ -41,6 +41,7 @@ docker compose up -d --build
 - `GET /api/metrics/:metric/latest?lookback=30m`
 - `GET /api/metrics/:metric/history?from=<ISO>&to=<ISO>&interval=30s`
 - `GET /api/dashboard/node-latest?prefix=node_&limit=100&lookback=15m`
+- `GET /api/dashboard/system?lookback=1h&interval=30s`
 
 ## CORS
 
@@ -53,7 +54,13 @@ Configure in compose via `ALLOWED_ORIGINS` and `ALLOWED_ORIGIN_SUFFIXES` if need
 
 ## Frontend behavior
 
-- Realtime data is fetched from backend (which reads InfluxDB).
+- No metric search UI; dashboard is fixed to:
+  - CPU usage %
+  - Memory usage %
+  - Disk usage %
+  - Network ingress bandwidth (Mbps)
+  - Network egress bandwidth (Mbps)
+- Realtime data is fetched from backend via `/api/dashboard/system`.
 - Historical data is fetched directly from GitHub raw JSON exports.
 - If backend is inaccessible, UI shows `Server is down`.
 

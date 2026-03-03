@@ -3,198 +3,92 @@
 const cfg = window.APP_CONFIG || {};
 const API_BASE = (cfg.apiBaseUrl || 'https://deployment-data-api.reefz.cc').replace(/\/$/, '');
 const GITHUB_RAW_BASE = (cfg.githubRawBaseUrl || guessGithubRawBase() || '').replace(/\/$/, '');
-const DEFAULT_PREFIX = cfg.defaultPrefix || 'node_';
 
-const metricPrefixInput = document.getElementById('metricPrefix');
-const metricListEl = document.getElementById('metricList');
-const metricCountEl = document.getElementById('metricCount');
-const selectedMetricEl = document.getElementById('selectedMetric');
-const latestRowsEl = document.getElementById('latestRows');
-const latestSummaryEl = document.getElementById('latestSummary');
 const serverStatusEl = document.getElementById('serverStatus');
 const lastRefreshEl = document.getElementById('lastRefresh');
 const historyDateEl = document.getElementById('historyDate');
 const historyMessageEl = document.getElementById('historyMessage');
-const realtimeEmptyEl = document.getElementById('realtimeEmpty');
 
-let realtimeChart;
-let historyChart;
-let selectedMetric = null;
+const cpuValueEl = document.getElementById('cpuValue');
+const memoryValueEl = document.getElementById('memoryValue');
+const diskValueEl = document.getElementById('diskValue');
+const ingressValueEl = document.getElementById('ingressValue');
+const egressValueEl = document.getElementById('egressValue');
+
+let realtimePercentChart;
+let realtimeBandwidthChart;
+let historyPercentChart;
+let historyBandwidthChart;
 let serverUp = false;
-let refreshTimer;
 
-document.getElementById('reloadMetrics').addEventListener('click', () => {
-  loadMetrics().catch(() => {});
-});
+const POLL_MS = 15000;
 
 document.getElementById('loadHistory').addEventListener('click', () => {
   loadHistory().catch(() => {});
 });
 
-async function boot() {
-  metricPrefixInput.value = DEFAULT_PREFIX;
-  historyDateEl.value = formatDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
-
-  await pingBackend();
-  await loadMetrics();
-
-  refreshTimer = setInterval(async () => {
-    await pingBackend();
-
-    if (serverUp && selectedMetric) {
-      await loadRealtime(selectedMetric);
-    }
-  }, 15000);
-}
-
 boot().catch((error) => {
   setServerDown(error.message);
 });
 
-async function pingBackend() {
+async function boot() {
+  historyDateEl.value = formatDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
+
+  await loadRealtime();
+  await loadHistory();
+
+  setInterval(async () => {
+    await loadRealtime();
+  }, POLL_MS);
+}
+
+async function loadRealtime() {
   try {
-    const res = await fetch(`${API_BASE}/api/health`, { headers: { Accept: 'application/json' } });
-
-    if (!res.ok) {
-      throw new Error(`Health check failed (${res.status})`);
-    }
-
-    const payload = await res.json();
-    if (payload.status !== 'ok') {
-      throw new Error(payload.error || 'Backend unhealthy');
-    }
-
+    const payload = await apiGet('/api/dashboard/system?lookback=1h&interval=30s');
     setServerUp();
+
+    renderLatestCards(payload.latest || {});
+    renderRealtimeCharts(payload.series || []);
+    lastRefreshEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (error) {
     setServerDown(error.message);
   }
 }
 
-async function loadMetrics() {
-  const prefix = metricPrefixInput.value.trim() || DEFAULT_PREFIX;
-  const payload = await apiGet(`/api/metrics?prefix=${encodeURIComponent(prefix)}&limit=1000`);
-  const metrics = payload.metrics || [];
-
-  metricCountEl.textContent = `${metrics.length} metrics`;
-  renderMetricList(metrics);
-
-  if (!selectedMetric && metrics.length > 0) {
-    await selectMetric(metrics[0]);
-  }
+function renderLatestCards(latest) {
+  cpuValueEl.textContent = formatPercent(latest.cpu_percent);
+  memoryValueEl.textContent = formatPercent(latest.memory_percent);
+  diskValueEl.textContent = formatPercent(latest.disk_percent);
+  ingressValueEl.textContent = formatMbps(latest.network_ingress_mbps);
+  egressValueEl.textContent = formatMbps(latest.network_egress_mbps);
 }
 
-function renderMetricList(metrics) {
-  metricListEl.innerHTML = '';
+function renderRealtimeCharts(series) {
+  const percentData = buildPercentDatasets(series);
+  const bandwidthData = buildBandwidthDatasets(series);
 
-  if (!metrics.length) {
-    metricListEl.innerHTML = '<div class="muted" style="padding:8px;">No metrics found.</div>';
-    return;
+  if (realtimePercentChart) {
+    realtimePercentChart.destroy();
   }
 
-  for (const metric of metrics) {
-    const btn = document.createElement('button');
-    btn.className = `metric-item${selectedMetric === metric ? ' active' : ''}`;
-    btn.textContent = metric;
-    btn.addEventListener('click', () => {
-      selectMetric(metric).catch(() => {});
-    });
-    metricListEl.appendChild(btn);
-  }
-}
-
-async function selectMetric(metric) {
-  selectedMetric = metric;
-  selectedMetricEl.textContent = metric;
-
-  const metricButtons = metricListEl.querySelectorAll('.metric-item');
-  for (const el of metricButtons) {
-    el.classList.toggle('active', el.textContent === metric);
+  if (realtimeBandwidthChart) {
+    realtimeBandwidthChart.destroy();
   }
 
-  await loadRealtime(metric);
-  await loadHistory();
-}
-
-async function loadRealtime(metric) {
-  if (!metric) {
-    return;
-  }
-
-  const now = new Date();
-  const from = new Date(now.getTime() - 60 * 60 * 1000);
-
-  const [latest, history] = await Promise.all([
-    apiGet(`/api/metrics/${encodeURIComponent(metric)}/latest?lookback=30m`),
-    apiGet(
-      `/api/metrics/${encodeURIComponent(metric)}/history?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(now.toISOString())}&interval=30s`
-    )
-  ]);
-
-  renderLatest(latest.series || []);
-  renderRealtimeChart(history.series || []);
-  lastRefreshEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
-}
-
-function renderLatest(series) {
-  latestRowsEl.innerHTML = '';
-
-  if (!series.length) {
-    latestSummaryEl.textContent = 'No fresh values for this metric.';
-    return;
-  }
-
-  latestSummaryEl.textContent = `${series.length} active series in the last lookback window.`;
-
-  for (const entry of series) {
-    const point = entry.points[0];
-    if (!point) {
-      continue;
-    }
-
-    const tr = document.createElement('tr');
-
-    const tags = Object.entries(entry.tags || {})
-      .map(([key, value]) => `${key}=${value}`)
-      .join(', ');
-
-    tr.innerHTML = `
-      <td>${escapeHtml(tags || '-') }</td>
-      <td>${escapeHtml(String(point.value))}</td>
-      <td>${new Date(point.time).toLocaleString()}</td>
-    `;
-
-    latestRowsEl.appendChild(tr);
-  }
-}
-
-function renderRealtimeChart(series) {
-  const datasets = chartSeriesFromInflux(series, 20);
-
-  if (realtimeChart) {
-    realtimeChart.destroy();
-  }
-
-  if (!datasets.length) {
-    realtimeEmptyEl.classList.remove('hidden');
-    return;
-  }
-
-  realtimeEmptyEl.classList.add('hidden');
-  const ctx = document.getElementById('realtimeChart');
-
-  realtimeChart = new Chart(ctx, {
+  realtimePercentChart = new Chart(document.getElementById('realtimePercentChart'), {
     type: 'line',
-    data: { datasets },
-    options: chartOptions('Realtime')
+    data: { datasets: percentData },
+    options: chartOptions('Usage %', true)
+  });
+
+  realtimeBandwidthChart = new Chart(document.getElementById('realtimeBandwidthChart'), {
+    type: 'line',
+    data: { datasets: bandwidthData },
+    options: chartOptions('Bandwidth (Mbps)', false)
   });
 }
 
 async function loadHistory() {
-  if (!selectedMetric) {
-    historyMessageEl.textContent = 'Select a metric first.';
-    return;
-  }
-
   const date = historyDateEl.value;
   if (!date) {
     historyMessageEl.textContent = 'Pick a date first.';
@@ -202,10 +96,7 @@ async function loadHistory() {
   }
 
   if (!GITHUB_RAW_BASE) {
-    historyMessageEl.textContent = 'GitHub raw base URL is not configured.';
-    if (historyChart) {
-      historyChart.destroy();
-    }
+    historyMessageEl.textContent = 'GitHub raw URL is not configured.';
     return;
   }
 
@@ -218,75 +109,90 @@ async function loadHistory() {
     }
 
     const payload = await response.json();
-    const result = payload?.payload?.data?.result || [];
-    const filtered = result.filter((entry) => entry.metric && entry.metric.__name__ === selectedMetric);
+    const rawResult = payload?.payload?.data?.result || [];
+    const derived = deriveSystemMetricsFromProm(rawResult);
 
-    if (historyChart) {
-      historyChart.destroy();
-    }
-
-    const datasets = filtered.slice(0, 20).map((entry, idx) => ({
-      label: labelFromPromSeries(entry.metric),
-      data: (entry.values || []).map((pair) => ({
-        x: Number(pair[0]) * 1000,
-        y: Number(pair[1])
-      })),
-      borderColor: palette(idx),
-      backgroundColor: palette(idx),
-      borderWidth: 1.8,
-      tension: 0.2,
-      pointRadius: 0
-    }));
-
-    if (!datasets.length) {
-      historyMessageEl.textContent = `No historical data for ${selectedMetric} on ${date}.`;
+    if (!derived.series.length) {
+      historyMessageEl.textContent = `No usable historical data for ${date}.`;
       return;
     }
 
-    historyMessageEl.textContent = `Loaded ${datasets.length} historical series from ${date}.`;
+    historyMessageEl.textContent = `Loaded ${derived.series.length} historical points from ${date}.`;
 
-    historyChart = new Chart(document.getElementById('historyChart'), {
-      type: 'line',
-      data: { datasets },
-      options: chartOptions('Historical')
-    });
+    renderHistoryCards(derived.latest);
+    renderHistoryCharts(derived.series);
   } catch (error) {
     historyMessageEl.textContent = `History load failed: ${error.message}`;
-    if (historyChart) {
-      historyChart.destroy();
-    }
   }
 }
 
-async function apiGet(path) {
-  try {
-    const response = await fetch(`${API_BASE}${path}`, { headers: { Accept: 'application/json' } });
-    if (!response.ok) {
-      throw new Error(`API ${response.status}`);
-    }
-
-    const payload = await response.json();
-    setServerUp();
-    return payload;
-  } catch (error) {
-    setServerDown(error.message);
-    throw error;
+function renderHistoryCards(latest) {
+  if (!latest) {
+    return;
   }
+
+  cpuValueEl.textContent = formatPercent(latest.cpu_percent);
+  memoryValueEl.textContent = formatPercent(latest.memory_percent);
+  diskValueEl.textContent = formatPercent(latest.disk_percent);
+  ingressValueEl.textContent = formatMbps(latest.network_ingress_mbps);
+  egressValueEl.textContent = formatMbps(latest.network_egress_mbps);
 }
 
-function chartSeriesFromInflux(series, maxSeries) {
-  return series.slice(0, maxSeries).map((entry, idx) => ({
-    label: labelFromTags(entry.tags),
-    data: (entry.points || []).map((point) => ({ x: Number(point.time), y: Number(point.value) })),
-    borderColor: palette(idx),
-    backgroundColor: palette(idx),
-    borderWidth: 1.8,
+function renderHistoryCharts(series) {
+  const percentData = buildPercentDatasets(series);
+  const bandwidthData = buildBandwidthDatasets(series);
+
+  if (historyPercentChart) {
+    historyPercentChart.destroy();
+  }
+
+  if (historyBandwidthChart) {
+    historyBandwidthChart.destroy();
+  }
+
+  historyPercentChart = new Chart(document.getElementById('historyPercentChart'), {
+    type: 'line',
+    data: { datasets: percentData },
+    options: chartOptions('Historical Usage %', true)
+  });
+
+  historyBandwidthChart = new Chart(document.getElementById('historyBandwidthChart'), {
+    type: 'line',
+    data: { datasets: bandwidthData },
+    options: chartOptions('Historical Bandwidth (Mbps)', false)
+  });
+}
+
+function buildPercentDatasets(series) {
+  return [
+    createDataset('CPU %', '#0077b6', series, 'cpu_percent'),
+    createDataset('Memory %', '#ef476f', series, 'memory_percent'),
+    createDataset('Disk %', '#ff9f1c', series, 'disk_percent')
+  ];
+}
+
+function buildBandwidthDatasets(series) {
+  return [
+    createDataset('Ingress Mbps', '#2a9d8f', series, 'network_ingress_mbps'),
+    createDataset('Egress Mbps', '#9b5de5', series, 'network_egress_mbps')
+  ];
+}
+
+function createDataset(label, color, series, key) {
+  return {
+    label,
+    borderColor: color,
+    backgroundColor: color,
+    borderWidth: 2,
+    tension: 0.2,
     pointRadius: 0,
-    tension: 0.2
-  }));
+    data: series
+      .filter((row) => Number.isFinite(row[key]))
+      .map((row) => ({ x: Number(row.time), y: Number(row[key]) }))
+  };
 }
 
-function chartOptions(title) {
+function chartOptions(title, isPercent) {
   return {
     responsive: true,
     maintainAspectRatio: true,
@@ -303,29 +209,198 @@ function chartOptions(title) {
             return new Date(Number(value)).toLocaleTimeString();
           }
         },
-        grid: { color: '#eef2f7' }
+        grid: { color: '#edf2f7' }
       },
       y: {
-        ticks: { color: '#526174' },
-        grid: { color: '#eef2f7' }
+        min: 0,
+        max: isPercent ? 100 : undefined,
+        ticks: {
+          color: '#526174',
+          callback(value) {
+            return isPercent ? `${value}%` : value;
+          }
+        },
+        grid: { color: '#edf2f7' }
       }
     }
   };
 }
 
-function labelFromTags(tags) {
-  const entries = Object.entries(tags || {});
-  if (!entries.length) {
-    return 'series';
-  }
+function deriveSystemMetricsFromProm(result) {
+  const idleCpu = filterPromSeries(result, 'node_cpu_seconds_total', (labels) => labels.mode === 'idle');
+  const memTotal = filterPromSeries(result, 'node_memory_MemTotal_bytes');
+  const memAvail = filterPromSeries(result, 'node_memory_MemAvailable_bytes');
 
-  return entries.map(([key, value]) => `${key}=${value}`).join(', ');
+  const fsFilter = (labels) => {
+    const fstype = labels.fstype || '';
+    const mountpoint = labels.mountpoint || '';
+    if (/^(tmpfs|overlay|squashfs|ramfs|nsfs)$/.test(fstype)) {
+      return false;
+    }
+    return !/^\/(sys|proc|dev|run)(\/|$)/.test(mountpoint);
+  };
+
+  const diskSize = filterPromSeries(result, 'node_filesystem_size_bytes', fsFilter);
+  const diskAvail = filterPromSeries(result, 'node_filesystem_avail_bytes', fsFilter);
+
+  const netFilter = (labels) => !/^(lo|veth.*|docker.*|br-.*|cni.*)$/.test(labels.device || '');
+  const netIn = filterPromSeries(result, 'node_network_receive_bytes_total', netFilter);
+  const netOut = filterPromSeries(result, 'node_network_transmit_bytes_total', netFilter);
+
+  const cpuIdleRateAvg = counterRateAverageByTime(idleCpu);
+  const cpuMap = mapValues(cpuIdleRateAvg, (rate) => clamp((1 - rate) * 100, 0, 100));
+
+  const memTotalMap = gaugeSumByTime(memTotal);
+  const memAvailMap = gaugeSumByTime(memAvail);
+  const memUsageMap = ratioUsageMap(memTotalMap, memAvailMap);
+
+  const diskSizeMap = gaugeSumByTime(diskSize);
+  const diskAvailMap = gaugeSumByTime(diskAvail);
+  const diskUsageMap = ratioUsageMap(diskSizeMap, diskAvailMap);
+
+  const netInBps = counterRateSumByTime(netIn);
+  const netOutBps = counterRateSumByTime(netOut);
+  const netInMbps = mapValues(netInBps, (bps) => (bps * 8) / 1_000_000);
+  const netOutMbps = mapValues(netOutBps, (bps) => (bps * 8) / 1_000_000);
+
+  const times = unionSortedTimes([cpuMap, memUsageMap, diskUsageMap, netInMbps, netOutMbps]);
+  const series = times.map((time) => ({
+    time,
+    cpu_percent: numOrNull(cpuMap.get(time)),
+    memory_percent: numOrNull(memUsageMap.get(time)),
+    disk_percent: numOrNull(diskUsageMap.get(time)),
+    network_ingress_mbps: numOrNull(netInMbps.get(time)),
+    network_egress_mbps: numOrNull(netOutMbps.get(time))
+  }));
+
+  return {
+    latest: series[series.length - 1] || null,
+    series
+  };
 }
 
-function labelFromPromSeries(metricLabels) {
-  const cloned = { ...(metricLabels || {}) };
-  delete cloned.__name__;
-  return labelFromTags(cloned);
+function filterPromSeries(result, metricName, predicate = () => true) {
+  return result.filter((entry) => {
+    const labels = entry.metric || {};
+    return labels.__name__ === metricName && predicate(labels);
+  });
+}
+
+function gaugeSumByTime(seriesList) {
+  const out = new Map();
+  for (const entry of seriesList) {
+    for (const pair of entry.values || []) {
+      const time = Number(pair[0]) * 1000;
+      const value = Number(pair[1]);
+      if (!Number.isFinite(time) || !Number.isFinite(value)) {
+        continue;
+      }
+      out.set(time, (out.get(time) || 0) + value);
+    }
+  }
+  return out;
+}
+
+function counterRateSumByTime(seriesList) {
+  const out = new Map();
+
+  for (const entry of seriesList) {
+    const values = entry.values || [];
+    for (let i = 1; i < values.length; i += 1) {
+      const prevTime = Number(values[i - 1][0]);
+      const currTime = Number(values[i][0]);
+      const prevValue = Number(values[i - 1][1]);
+      const currValue = Number(values[i][1]);
+
+      const deltaT = currTime - prevTime;
+      const deltaV = currValue - prevValue;
+
+      if (deltaT <= 0 || deltaV < 0) {
+        continue;
+      }
+
+      const rate = deltaV / deltaT;
+      const timeMs = currTime * 1000;
+      out.set(timeMs, (out.get(timeMs) || 0) + rate);
+    }
+  }
+
+  return out;
+}
+
+function counterRateAverageByTime(seriesList) {
+  const accum = new Map();
+
+  for (const entry of seriesList) {
+    const values = entry.values || [];
+    for (let i = 1; i < values.length; i += 1) {
+      const prevTime = Number(values[i - 1][0]);
+      const currTime = Number(values[i][0]);
+      const prevValue = Number(values[i - 1][1]);
+      const currValue = Number(values[i][1]);
+
+      const deltaT = currTime - prevTime;
+      const deltaV = currValue - prevValue;
+
+      if (deltaT <= 0 || deltaV < 0) {
+        continue;
+      }
+
+      const rate = deltaV / deltaT;
+      const timeMs = currTime * 1000;
+      const cell = accum.get(timeMs) || { sum: 0, count: 0 };
+      cell.sum += rate;
+      cell.count += 1;
+      accum.set(timeMs, cell);
+    }
+  }
+
+  const out = new Map();
+  for (const [time, value] of accum.entries()) {
+    out.set(time, value.count > 0 ? value.sum / value.count : NaN);
+  }
+  return out;
+}
+
+function ratioUsageMap(totalMap, availMap) {
+  const out = new Map();
+  for (const [time, total] of totalMap.entries()) {
+    const avail = availMap.get(time);
+    if (!Number.isFinite(total) || !Number.isFinite(avail) || total <= 0) {
+      continue;
+    }
+    out.set(time, clamp((1 - avail / total) * 100, 0, 100));
+  }
+  return out;
+}
+
+function mapValues(input, fn) {
+  const out = new Map();
+  for (const [time, value] of input.entries()) {
+    const next = fn(value);
+    if (Number.isFinite(next)) {
+      out.set(time, next);
+    }
+  }
+  return out;
+}
+
+function unionSortedTimes(maps) {
+  const all = new Set();
+  for (const map of maps) {
+    for (const time of map.keys()) {
+      all.add(time);
+    }
+  }
+  return Array.from(all).sort((a, b) => a - b);
+}
+
+async function apiGet(path) {
+  const response = await fetch(`${API_BASE}${path}`, { headers: { Accept: 'application/json' } });
+  if (!response.ok) {
+    throw new Error(`API ${response.status}`);
+  }
+  return response.json();
 }
 
 function setServerUp() {
@@ -346,30 +421,26 @@ function setServerDown(reason) {
   serverStatusEl.classList.add('down');
 }
 
-function palette(i) {
-  const colors = [
-    '#006e8a',
-    '#cc5803',
-    '#2a9d8f',
-    '#c1121f',
-    '#7c6a0a',
-    '#8a4fff',
-    '#2f4858',
-    '#bc5090',
-    '#588157',
-    '#ff7b00'
-  ];
-
-  return colors[i % colors.length];
+function formatPercent(value) {
+  if (!Number.isFinite(value)) {
+    return '--%';
+  }
+  return `${value.toFixed(2)}%`;
 }
 
-function escapeHtml(value) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+function formatMbps(value) {
+  if (!Number.isFinite(value)) {
+    return '-- Mbps';
+  }
+  return `${value.toFixed(3)} Mbps`;
+}
+
+function numOrNull(value) {
+  return Number.isFinite(value) ? Number(value.toFixed(3)) : null;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function formatDate(date) {
