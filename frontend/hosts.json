@@ -1,12 +1,8 @@
 {
   "hosts": [
     {
-      "name": "Production API",
+      "name": "Reefz Server",
       "apiUrl": "https://deployment-data-api.reefz.cc"
-    },
-    {
-      "name": "Local API",
-      "apiUrl": "http://localhost:13001"
     }
   ]
 }
