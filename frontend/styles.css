@@ -148,6 +148,7 @@ header p {
 }
 
 input,
+select,
 button {
   border: 1px solid #bcc9d8;
   border-radius: 8px;

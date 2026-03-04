@@ -56,7 +56,20 @@
         <section class="panel">
           <div class="row between wrap">
             <h2>Realtime (last 1 hour)</h2>
-            <div id="lastRefresh" class="muted">-</div>
+            <div class="row">
+              <label for="timeRange" class="muted">Range</label>
+              <select id="timeRange">
+                <option value="1h">1h</option>
+                <option value="5h">5h</option>
+                <option value="12h">12h</option>
+                <option value="24h">24h</option>
+                <option value="3d">3d</option>
+                <option value="7d">7d</option>
+                <option value="15d">15d</option>
+                <option value="30d">30d</option>
+              </select>
+              <div id="lastRefresh" class="muted">-</div>
+            </div>
           </div>
           <canvas id="realtimePercentChart"></canvas>
           <canvas id="realtimeBandwidthChart"></canvas>
@@ -64,7 +77,7 @@
 
         <section class="panel">
           <div class="row between wrap">
-            <h2>Historical (GitHub Raw)</h2>
+            <h2>Historical (GitHub Raw, uses selected range)</h2>
             <div class="row">
               <input id="historyDate" type="date" />
               <button id="loadHistory">Load History</button>
