@@ -2,7 +2,7 @@
 
 This stack provides:
 - `prometheus` scraping `node-exporter`
-- `daily-exporter` exporting previous UTC day data and pushing to GitHub (`exports/YYYY-MM-DD.json`)
+- `daily-exporter` exporting previous UTC day data and pushing to GitHub (`exports/YYYY-MM-DD--<source-slug>.json`)
 - `backend` API exposing Prometheus data over HTTP on `localhost:13001`
 - `frontend` Grafana-like dashboard on `localhost:13002`
 
@@ -20,6 +20,7 @@ Copy `.env.example` to `.env` and fill required values:
 - `GITHUB_REPO`
 - `GITHUB_USERNAME`
 - `GITHUB_TOKEN`
+- `SOURCE_NAME` (human-readable host/source name, used in export filename slug)
 - `FRONTEND_GITHUB_RAW_BASE_URL` (example: `https://raw.githubusercontent.com/<owner>/<repo>/main/exports`)
 
 Optional:
@@ -59,13 +60,43 @@ Configure in compose via `ALLOWED_ORIGINS` and `ALLOWED_ORIGIN_SUFFIXES` if need
 - No metric search UI; dashboard is fixed to:
   - CPU usage %
   - Memory usage %
-  - Disk usage %
+  - Disk I/O usage %
   - Network ingress bandwidth (Mbps)
   - Network egress bandwidth (Mbps)
 - Realtime data is fetched from backend via `/api/dashboard/system` (source: Prometheus).
 - Historical data is fetched from GitHub raw JSON exports.
   - for ranges above 24h, frontend fetches multiple daily export files and merges them.
+  - frontend first looks for host-specific files: `YYYY-MM-DD--<host-slug>.json`
+  - then falls back to legacy: `YYYY-MM-DD.json`
 - If backend is inaccessible, UI shows `Server is down`.
+
+## Add A Host
+
+1. Add host entry to `frontend/hosts.json`:
+
+```json
+{
+  "hosts": [
+    {
+      "name": "Reefz Server",
+      "apiUrl": "https://deployment-data-api.reefz.cc"
+    },
+    {
+      "name": "Singapore Node",
+      "apiUrl": "https://deployment-data-api-sg.example.com"
+    }
+  ]
+}
+```
+
+2. Each host stores only:
+   - `name`: readable host name shown in sidebar
+   - `apiUrl`: backend URL for that host
+3. On that host deployment, set `SOURCE_NAME` to the same readable name.
+4. `daily-exporter` will write files as:
+   - `exports/YYYY-MM-DD--<source-slug>.json`
+5. Slug rule:
+   - lowercase, non-alphanumeric replaced by `-`, trimmed (`Reefz Server` -> `reefz-server`)
 
 ## GitHub Pages deployment
 

@@ -46,6 +46,7 @@ services:
       WORK_DIR: /data/repo
       OUTPUT_DIR: exports
       EXPORT_BRANCH: main
+      SOURCE_NAME: ${SOURCE_NAME:-Reefz Server}
       GIT_AUTHOR_NAME: prometheus-bot
       GIT_AUTHOR_EMAIL: prometheus-bot@example.com
       GITHUB_REPO: ${GITHUB_REPO}
