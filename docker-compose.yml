@@ -1,22 +1,9 @@
 services:
-  influxdb:
-    image: influxdb:1.8
-    container_name: influxdb
-    restart: unless-stopped
-    environment:
-      INFLUXDB_DB: prometheus
-      INFLUXDB_HTTP_FLUX_ENABLED: "true"
-    ports:
-      - "8086:8086"
-    volumes:
-      - influxdb-data:/var/lib/influxdb
-
   prometheus:
     image: prom/prometheus:v2.51.2
     container_name: prometheus
     restart: unless-stopped
     depends_on:
-      - influxdb
       - node-exporter
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -73,11 +60,10 @@ services:
     container_name: metrics-backend
     restart: unless-stopped
     depends_on:
-      - influxdb
+      - prometheus
     environment:
       PORT: 13001
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_DB: prometheus
+      PROMETHEUS_URL: http://prometheus:9090
       DEFAULT_METRIC_PREFIX: node_
       DEFAULT_METRIC_LIMIT: 1000
       QUERY_CONCURRENCY: 8
@@ -101,6 +87,5 @@ services:
       - "13002:80"
 
 volumes:
-  influxdb-data:
   prometheus-data:
   daily-exporter-data:

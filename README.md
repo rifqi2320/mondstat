@@ -2,14 +2,12 @@
 
 This stack provides:
 - `prometheus` scraping `node-exporter`
-- `influxdb` storing Prometheus data via `remote_write`
 - `daily-exporter` exporting previous UTC day data and pushing to GitHub (`exports/YYYY-MM-DD.json`)
-- `backend` API exposing InfluxDB data over HTTP on `localhost:13001`
+- `backend` API exposing Prometheus data over HTTP on `localhost:13001`
 - `frontend` Grafana-like dashboard on `localhost:13002`
 
 ## Services and ports
 
-- InfluxDB: `localhost:8086`
 - Prometheus: `localhost:${PROMETHEUS_PORT:-19090}` (container still uses `9090`)
 - Node Exporter: `localhost:9100`
 - Backend API: `localhost:13001`
@@ -60,7 +58,7 @@ Configure in compose via `ALLOWED_ORIGINS` and `ALLOWED_ORIGIN_SUFFIXES` if need
   - Disk usage %
   - Network ingress bandwidth (Mbps)
   - Network egress bandwidth (Mbps)
-- Realtime data is fetched from backend via `/api/dashboard/system`.
+- Realtime data is fetched from backend via `/api/dashboard/system` (source: Prometheus).
 - Historical data is fetched directly from GitHub raw JSON exports.
 - If backend is inaccessible, UI shows `Server is down`.
 
