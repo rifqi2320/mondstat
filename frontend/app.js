@@ -266,7 +266,8 @@ async function loadHistory() {
 
   try {
     const dates = listDateStringsUtc(startMs, endMs);
-    const files = await Promise.all(dates.map((day) => loadHistoryFile(day)));
+    const sourceSlug = slugifyName(activeHostName());
+    const files = await Promise.all(dates.map((day) => loadHistoryFile(day, sourceSlug)));
     const available = files.filter(Boolean);
 
     if (!available.length) {
@@ -297,25 +298,34 @@ async function loadHistory() {
   }
 }
 
-async function loadHistoryFile(day) {
-  const url = `${GITHUB_RAW_BASE}/${day}.json`;
+async function loadHistoryFile(day, sourceSlug) {
+  const candidates = [];
 
-  try {
-    const response = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!response.ok) {
-      return null;
-    }
-
-    const payload = await response.json();
-    const result = payload?.payload?.data?.result;
-    if (!Array.isArray(result)) {
-      return null;
-    }
-
-    return { day, result };
-  } catch (_error) {
-    return null;
+  if (sourceSlug) {
+    candidates.push(`${GITHUB_RAW_BASE}/${day}--${sourceSlug}.json`);
   }
+  candidates.push(`${GITHUB_RAW_BASE}/${day}.json`);
+
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        continue;
+      }
+
+      const payload = await response.json();
+      const result = payload?.payload?.data?.result;
+      if (!Array.isArray(result)) {
+        continue;
+      }
+
+      return { day, result };
+    } catch (_error) {
+      // try next candidate
+    }
+  }
+
+  return null;
 }
 
 function mergePromResults(resultArrays, minTsSec, maxTsSec) {
@@ -376,7 +386,7 @@ function buildPercentDatasets(series) {
   return [
     createDataset('CPU %', '#0077b6', series, 'cpu_percent'),
     createDataset('Memory %', '#ef476f', series, 'memory_percent'),
-    createDataset('Disk %', '#ff9f1c', series, 'disk_percent')
+    createDataset('Disk I/O %', '#ff9f1c', series, 'disk_percent')
   ];
 }
 
@@ -453,18 +463,11 @@ function deriveSystemMetricsFromProm(result) {
   const idleCpu = filterPromSeries(result, 'node_cpu_seconds_total', (labels) => labels.mode === 'idle');
   const memTotal = filterPromSeries(result, 'node_memory_MemTotal_bytes');
   const memAvail = filterPromSeries(result, 'node_memory_MemAvailable_bytes');
-
-  const fsFilter = (labels) => {
-    const fstype = labels.fstype || '';
-    const mountpoint = labels.mountpoint || '';
-    if (/^(tmpfs|overlay|squashfs|ramfs|nsfs)$/.test(fstype)) {
-      return false;
-    }
-    return !/^\/(sys|proc|dev|run)(\/|$)/.test(mountpoint);
-  };
-
-  const diskSize = filterPromSeries(result, 'node_filesystem_size_bytes', fsFilter);
-  const diskAvail = filterPromSeries(result, 'node_filesystem_avail_bytes', fsFilter);
+  const diskBusy = filterPromSeries(
+    result,
+    'node_disk_io_time_seconds_total',
+    (labels) => !/^(loop|ram|fd|sr|dm-|md)/.test(labels.device || '')
+  );
 
   const netFilter = (labels) => !/^(lo|veth.*|docker.*|br-.*|cni.*)$/.test(labels.device || '');
   const netIn = filterPromSeries(result, 'node_network_receive_bytes_total', netFilter);
@@ -476,22 +479,20 @@ function deriveSystemMetricsFromProm(result) {
   const memTotalMap = gaugeSumByTime(memTotal);
   const memAvailMap = gaugeSumByTime(memAvail);
   const memUsageMap = ratioUsageMap(memTotalMap, memAvailMap);
-
-  const diskSizeMap = gaugeSumByTime(diskSize);
-  const diskAvailMap = gaugeSumByTime(diskAvail);
-  const diskUsageMap = ratioUsageMap(diskSizeMap, diskAvailMap);
+  const diskBusyRateMax = counterRateMaxByTime(diskBusy);
+  const diskBusyMap = mapValues(diskBusyRateMax, (rate) => clamp(rate * 100, 0, 100));
 
   const netInBps = counterRateSumByTime(netIn);
   const netOutBps = counterRateSumByTime(netOut);
   const netInMbps = mapValues(netInBps, (bps) => (bps * 8) / 1_000_000);
   const netOutMbps = mapValues(netOutBps, (bps) => (bps * 8) / 1_000_000);
 
-  const times = unionSortedTimes([cpuMap, memUsageMap, diskUsageMap, netInMbps, netOutMbps]);
+  const times = unionSortedTimes([cpuMap, memUsageMap, diskBusyMap, netInMbps, netOutMbps]);
   const series = times.map((time) => ({
     time,
     cpu_percent: numOrNull(cpuMap.get(time)),
     memory_percent: numOrNull(memUsageMap.get(time)),
-    disk_percent: numOrNull(diskUsageMap.get(time)),
+    disk_percent: numOrNull(diskBusyMap.get(time)),
     network_ingress_mbps: numOrNull(netInMbps.get(time)),
     network_egress_mbps: numOrNull(netOutMbps.get(time))
   }));
@@ -579,6 +580,34 @@ function counterRateAverageByTime(seriesList) {
   for (const [time, value] of accum.entries()) {
     out.set(time, value.count > 0 ? value.sum / value.count : NaN);
   }
+  return out;
+}
+
+function counterRateMaxByTime(seriesList) {
+  const out = new Map();
+
+  for (const entry of seriesList) {
+    const values = entry.values || [];
+    for (let i = 1; i < values.length; i += 1) {
+      const prevTime = Number(values[i - 1][0]);
+      const currTime = Number(values[i][0]);
+      const prevValue = Number(values[i - 1][1]);
+      const currValue = Number(values[i][1]);
+
+      const deltaT = currTime - prevTime;
+      const deltaV = currValue - prevValue;
+
+      if (deltaT <= 0 || deltaV < 0) {
+        continue;
+      }
+
+      const rate = deltaV / deltaT;
+      const timeMs = currTime * 1000;
+      const existing = out.get(timeMs);
+      out.set(timeMs, existing === undefined ? rate : Math.max(existing, rate));
+    }
+  }
+
   return out;
 }
 
@@ -751,6 +780,16 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function slugifyName(value) {
+  const raw = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+
+  return raw || 'unknown-source';
 }
 
 function readStoredHostApi() {

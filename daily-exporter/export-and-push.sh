@@ -14,6 +14,7 @@ done
 : "${WORK_DIR:=/data/repo}"
 : "${OUTPUT_DIR:=exports}"
 : "${EXPORT_BRANCH:=main}"
+: "${SOURCE_NAME:=unknown-source}"
 : "${GIT_AUTHOR_NAME:=prometheus-bot}"
 : "${GIT_AUTHOR_EMAIL:=prometheus-bot@example.com}"
 
@@ -60,22 +61,30 @@ else
 fi
 
 mkdir -p "${WORK_DIR}/${OUTPUT_DIR}"
-output_file="${WORK_DIR}/${OUTPUT_DIR}/${export_day}.json"
+source_slug="$(printf '%s' "${SOURCE_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+if [[ -z "${source_slug}" ]]; then
+  source_slug="unknown-source"
+fi
+
+output_name="${export_day}--${source_slug}.json"
+output_file="${WORK_DIR}/${OUTPUT_DIR}/${output_name}"
 
 jq -n \
   --arg date "${export_day}" \
+  --arg source_name "${SOURCE_NAME}" \
+  --arg source_slug "${source_slug}" \
   --arg query "${PROM_QUERY}" \
   --arg start "${start_time}" \
   --arg end "${end_time}" \
   --slurpfile payload "${tmp_result}" \
-  '{date: $date, query: $query, start: $start, end: $end, payload: $payload[0]}' > "${output_file}"
+  '{date: $date, source_name: $source_name, source_slug: $source_slug, query: $query, start: $start, end: $end, payload: $payload[0]}' > "${output_file}"
 
 rm -f "${tmp_result}"
 
 git -C "${WORK_DIR}" config user.name "${GIT_AUTHOR_NAME}"
 git -C "${WORK_DIR}" config user.email "${GIT_AUTHOR_EMAIL}"
 
-git -C "${WORK_DIR}" add "${OUTPUT_DIR}/${export_day}.json"
+git -C "${WORK_DIR}" add "${OUTPUT_DIR}/${output_name}"
 
 if git -C "${WORK_DIR}" diff --cached --quiet; then
   echo "No changes detected for ${export_day}; skipping commit."

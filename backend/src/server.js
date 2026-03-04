@@ -157,7 +157,7 @@ app.get('/api/dashboard/system', async (req, res) => {
       cpu_percent: '100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[1m])))',
       memory_percent: '100 * (1 - (sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)))',
       disk_percent:
-        '100 * (1 - (sum(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|nsfs",mountpoint!~"^/(sys|proc|dev|run)($|/).*"}) / sum(node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|nsfs",mountpoint!~"^/(sys|proc|dev|run)($|/).*"})))',
+        '100 * max(rate(node_disk_io_time_seconds_total{device!~"^(loop|ram|fd|sr|dm-|md).*"}[1m]))',
       network_ingress_mbps:
         '(sum(rate(node_network_receive_bytes_total{device!~"lo|veth.*|docker.*|br-.*|cni.*"}[1m])) * 8) / 1e6',
       network_egress_mbps:
