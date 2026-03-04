@@ -24,7 +24,7 @@ Copy `.env.example` to `.env` and fill required values:
 
 Optional:
 - `PROMETHEUS_PORT` (defaults to `19090` to avoid `9090` conflicts)
-- `FRONTEND_API_BASE_URL` (defaults to `https://deployment-data-api.reefz.cc`; set `http://localhost:13001` for local-only use)
+- `FRONTEND_API_BASE_URL` (fallback default if host list is unavailable)
 
 ## Start
 
@@ -52,6 +52,9 @@ Configure in compose via `ALLOWED_ORIGINS` and `ALLOWED_ORIGIN_SUFFIXES` if need
 
 ## Frontend behavior
 
+- Host list is loaded from committed file: `frontend/hosts.json`
+  - each host entry stores only: `name` and `apiUrl`
+  - sidebar lets you switch active host/API in realtime
 - No metric search UI; dashboard is fixed to:
   - CPU usage %
   - Memory usage %

@@ -1,0 +1,12 @@
+{
+  "hosts": [
+    {
+      "name": "Production API",
+      "apiUrl": "https://deployment-data-api.reefz.cc"
+    },
+    {
+      "name": "Local API",
+      "apiUrl": "http://localhost:13001"
+    }
+  ]
+}

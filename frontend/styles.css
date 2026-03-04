@@ -53,21 +53,71 @@ header p {
 .layout {
   padding: 16px;
   display: grid;
+  grid-template-columns: 280px 1fr;
   gap: 14px;
 }
 
-.cards {
+.content {
   display: grid;
-  grid-template-columns: repeat(5, minmax(160px, 1fr));
-  gap: 10px;
+  gap: 14px;
 }
 
-.metric-card,
-.panel {
+.panel,
+.metric-card {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 12px;
+}
+
+.sidebar {
+  height: fit-content;
+}
+
+.host-selected {
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.host-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.host-item {
+  border: 1px solid #bcc9d8;
+  border-radius: 8px;
+  padding: 9px;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.host-item.active {
+  border-color: #5bb8d7;
+  background: #e9f8fd;
+}
+
+.host-name {
+  display: block;
+  font-weight: 600;
+  color: #1f3147;
+}
+
+.host-url {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 10px;
 }
 
 .metric-card h2 {
@@ -125,7 +175,17 @@ canvas {
   font-size: 0.9rem;
 }
 
-@media (max-width: 1100px) {
+code {
+  background: #eef3f8;
+  border-radius: 6px;
+  padding: 1px 4px;
+}
+
+@media (max-width: 1220px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
   .cards {
     grid-template-columns: repeat(2, minmax(160px, 1fr));
   }
