@@ -5,8 +5,7 @@ const express = require('express');
 const app = express();
 
 const PORT = Number(process.env.PORT || 13001);
-const INFLUX_URL = (process.env.INFLUX_URL || 'http://influxdb:8086').replace(/\/$/, '');
-const INFLUX_DB = process.env.INFLUX_DB || 'prometheus';
+const PROMETHEUS_URL = (process.env.PROMETHEUS_URL || 'http://prometheus:9090').replace(/\/$/, '');
 const DEFAULT_PREFIX = process.env.DEFAULT_METRIC_PREFIX || 'node_';
 const DEFAULT_LIMIT = clampInt(process.env.DEFAULT_METRIC_LIMIT, 500, 1, 5000);
 const QUERY_CONCURRENCY = clampInt(process.env.QUERY_CONCURRENCY, 8, 1, 32);
@@ -24,12 +23,12 @@ app.use(corsMiddleware);
 
 app.get('/api/health', async (_req, res) => {
   try {
-    await influxQuery('SHOW DATABASES');
-    res.json({ status: 'ok', influx: 'up' });
+    await prometheusQuery('up');
+    res.json({ status: 'ok', prometheus: 'up' });
   } catch (error) {
     res.status(503).json({
       status: 'down',
-      influx: 'down',
+      prometheus: 'down',
       error: error.message
     });
   }
@@ -44,7 +43,12 @@ app.get('/api/metrics', async (req, res) => {
       return res.status(400).json({ error: 'Invalid prefix. Allowed: letters, digits, _, :' });
     }
 
-    const metrics = await listMeasurements(prefix, limit);
+    const all = await listMetricNames();
+    const metrics = all
+      .filter((name) => (prefix ? name.startsWith(prefix) : true))
+      .slice(0, limit)
+      .sort();
+
     return res.json({ prefix, count: metrics.length, metrics });
   } catch (error) {
     return res.status(500).json({ error: error.message });
@@ -59,9 +63,9 @@ app.get('/api/metrics/:metric/latest', async (req, res) => {
     validateMetric(metric);
     validateDuration(lookback, 'lookback');
 
-    const q = `SELECT LAST("value") AS value FROM ${quoteIdent(metric)} WHERE time > now() - ${lookback} GROUP BY *`;
-    const result = await influxQuery(q);
-    const series = extractSeries(result);
+    const query = `last_over_time(${metric}[${lookback}])`;
+    const payload = await prometheusQuery(query);
+    const series = extractSeriesFromInstant(payload);
 
     return res.json({ metric, lookback, series });
   } catch (error) {
@@ -83,24 +87,15 @@ app.get('/api/metrics/:metric/history', async (req, res) => {
     if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
       throw new Error('Invalid from/to timestamp (must be ISO date).');
     }
-
     if (from >= to) {
       throw new Error('Invalid range: from must be before to.');
     }
 
-    const fromIso = from.toISOString();
-    const toIso = to.toISOString();
+    const stepSeconds = Math.max(1, Math.floor(durationToMs(interval) / 1000));
+    const payload = await prometheusQueryRange(metric, from.getTime(), to.getTime(), stepSeconds);
+    const series = extractSeriesFromRange(payload);
 
-    const q = [
-      `SELECT MEAN("value") AS value FROM ${quoteIdent(metric)}`,
-      `WHERE time >= '${fromIso}' AND time <= '${toIso}'`,
-      `GROUP BY time(${interval}), * fill(none)`
-    ].join(' ');
-
-    const result = await influxQuery(q);
-    const series = extractSeries(result);
-
-    return res.json({ metric, from: fromIso, to: toIso, interval, series });
+    return res.json({ metric, from: from.toISOString(), to: to.toISOString(), interval, series });
   } catch (error) {
     const status = /invalid/i.test(error.message) ? 400 : 500;
     return res.status(status).json({ error: error.message });
@@ -118,11 +113,14 @@ app.get('/api/dashboard/node-latest', async (req, res) => {
     }
     validateDuration(lookback, 'lookback');
 
-    const metrics = await listMeasurements(prefix, limit);
+    const metrics = (await listMetricNames())
+      .filter((name) => (prefix ? name.startsWith(prefix) : true))
+      .slice(0, limit)
+      .sort();
+
     const cards = await mapWithConcurrency(metrics, QUERY_CONCURRENCY, async (metric) => {
-      const q = `SELECT LAST("value") AS value FROM ${quoteIdent(metric)} WHERE time > now() - ${lookback}`;
-      const result = await influxQuery(q);
-      const series = extractSeries(result);
+      const payload = await prometheusQuery(`last_over_time(${metric}[${lookback}])`);
+      const series = extractSeriesFromInstant(payload);
       const first = series[0] && series[0].points[0] ? series[0].points[0] : null;
 
       return {
@@ -153,117 +151,50 @@ app.get('/api/dashboard/system', async (req, res) => {
 
     const toMs = Date.now();
     const fromMs = toMs - lookbackMs;
-    const fromIso = new Date(fromMs).toISOString();
-    const toIso = new Date(toMs).toISOString();
+    const stepSeconds = Math.max(1, Math.floor(durationToMs(interval) / 1000));
 
-    const cpuQuery = [
-      'SELECT (100 - (MEAN("idle_rate") * 100)) AS value',
-      'FROM (',
-      'SELECT NON_NEGATIVE_DERIVATIVE(MEAN("value"), 1s) AS idle_rate',
-      'FROM "node_cpu_seconds_total"',
-      `WHERE "mode"='idle' AND time >= '${fromIso}' AND time <= '${toIso}'`,
-      `GROUP BY time(${interval}), "instance", "cpu" fill(none)`,
-      ')',
-      `GROUP BY time(${interval}) fill(none)`
-    ].join(' ');
+    const queries = {
+      cpu_percent: '100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[1m])))',
+      memory_percent: '100 * (1 - (sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)))',
+      disk_percent:
+        '100 * (1 - (sum(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|nsfs",mountpoint!~"^/(sys|proc|dev|run)($|/).*"}) / sum(node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs|nsfs",mountpoint!~"^/(sys|proc|dev|run)($|/).*"})))',
+      network_ingress_mbps:
+        '(sum(rate(node_network_receive_bytes_total{device!~"lo|veth.*|docker.*|br-.*|cni.*"}[1m])) * 8) / 1e6',
+      network_egress_mbps:
+        '(sum(rate(node_network_transmit_bytes_total{device!~"lo|veth.*|docker.*|br-.*|cni.*"}[1m])) * 8) / 1e6'
+    };
 
-    const networkRxQuery = [
-      'SELECT SUM("rate") AS value',
-      'FROM (',
-      'SELECT NON_NEGATIVE_DERIVATIVE(MEAN("value"), 1s) AS rate',
-      'FROM "node_network_receive_bytes_total"',
-      `WHERE "device" !~ /^(lo|veth.*|docker.*|br-.*|cni.*)$/ AND time >= '${fromIso}' AND time <= '${toIso}'`,
-      `GROUP BY time(${interval}), "instance", "device" fill(none)`,
-      ')',
-      `GROUP BY time(${interval}) fill(none)`
-    ].join(' ');
+    const entries = await Promise.all(
+      Object.entries(queries).map(async ([key, query]) => {
+        const payload = await prometheusQueryRange(query, fromMs, toMs, stepSeconds);
+        return [key, mapFromRangePayload(payload)];
+      })
+    );
 
-    const networkTxQuery = [
-      'SELECT SUM("rate") AS value',
-      'FROM (',
-      'SELECT NON_NEGATIVE_DERIVATIVE(MEAN("value"), 1s) AS rate',
-      'FROM "node_network_transmit_bytes_total"',
-      `WHERE "device" !~ /^(lo|veth.*|docker.*|br-.*|cni.*)$/ AND time >= '${fromIso}' AND time <= '${toIso}'`,
-      `GROUP BY time(${interval}), "instance", "device" fill(none)`,
-      ')',
-      `GROUP BY time(${interval}) fill(none)`
-    ].join(' ');
+    const maps = Object.fromEntries(entries);
+    const times = sortedTimeUnion(Object.values(maps));
 
-    const memTotalQuery = [
-      'SELECT SUM("value") AS value',
-      'FROM "node_memory_MemTotal_bytes"',
-      `WHERE time >= '${fromIso}' AND time <= '${toIso}'`,
-      `GROUP BY time(${interval}) fill(none)`
-    ].join(' ');
-
-    const memAvailQuery = [
-      'SELECT SUM("value") AS value',
-      'FROM "node_memory_MemAvailable_bytes"',
-      `WHERE time >= '${fromIso}' AND time <= '${toIso}'`,
-      `GROUP BY time(${interval}) fill(none)`
-    ].join(' ');
-
-    const diskSizeQuery = [
-      'SELECT SUM("value") AS value',
-      'FROM "node_filesystem_size_bytes"',
-      `WHERE "fstype" !~ /^(tmpfs|overlay|squashfs|ramfs|nsfs)$/`,
-      `AND "mountpoint" !~ /^\\/(sys|proc|dev|run)($|\\/)/`,
-      `AND time >= '${fromIso}' AND time <= '${toIso}'`,
-      `GROUP BY time(${interval}) fill(none)`
-    ].join(' ');
-
-    const diskAvailQuery = [
-      'SELECT SUM("value") AS value',
-      'FROM "node_filesystem_avail_bytes"',
-      `WHERE "fstype" !~ /^(tmpfs|overlay|squashfs|ramfs|nsfs)$/`,
-      `AND "mountpoint" !~ /^\\/(sys|proc|dev|run)($|\\/)/`,
-      `AND time >= '${fromIso}' AND time <= '${toIso}'`,
-      `GROUP BY time(${interval}) fill(none)`
-    ].join(' ');
-
-    const [cpuRaw, netInRaw, netOutRaw, memTotalRaw, memAvailRaw, diskSizeRaw, diskAvailRaw] = await Promise.all([
-      queryValueSeries(cpuQuery),
-      queryValueSeries(networkRxQuery),
-      queryValueSeries(networkTxQuery),
-      queryValueSeries(memTotalQuery),
-      queryValueSeries(memAvailQuery),
-      queryValueSeries(diskSizeQuery),
-      queryValueSeries(diskAvailQuery)
-    ]);
-
-    const cpuMap = mapFromPoints(cpuRaw, (value) => clampNumber(value, 0, 100));
-    const memTotalMap = mapFromPoints(memTotalRaw);
-    const memAvailMap = mapFromPoints(memAvailRaw);
-    const diskSizeMap = mapFromPoints(diskSizeRaw);
-    const diskAvailMap = mapFromPoints(diskAvailRaw);
-    const netInMbpsMap = mapFromPoints(netInRaw, (value) => (value * 8) / 1_000_000);
-    const netOutMbpsMap = mapFromPoints(netOutRaw, (value) => (value * 8) / 1_000_000);
-
-    const memUsageMap = ratioUsageMap(memTotalMap, memAvailMap);
-    const diskUsageMap = ratioUsageMap(diskSizeMap, diskAvailMap);
-
-    const times = sortedTimeUnion([cpuMap, memUsageMap, diskUsageMap, netInMbpsMap, netOutMbpsMap]);
     const series = times.map((time) => ({
       time,
-      cpu_percent: numOrNull(cpuMap.get(time)),
-      memory_percent: numOrNull(memUsageMap.get(time)),
-      disk_percent: numOrNull(diskUsageMap.get(time)),
-      network_ingress_mbps: numOrNull(netInMbpsMap.get(time)),
-      network_egress_mbps: numOrNull(netOutMbpsMap.get(time))
+      cpu_percent: numOrNull(maps.cpu_percent.get(time)),
+      memory_percent: numOrNull(maps.memory_percent.get(time)),
+      disk_percent: numOrNull(maps.disk_percent.get(time)),
+      network_ingress_mbps: numOrNull(maps.network_ingress_mbps.get(time)),
+      network_egress_mbps: numOrNull(maps.network_egress_mbps.get(time))
     }));
 
     const latest = {
-      cpu_percent: latestValue(cpuMap),
-      memory_percent: latestValue(memUsageMap),
-      disk_percent: latestValue(diskUsageMap),
-      network_ingress_mbps: latestValue(netInMbpsMap),
-      network_egress_mbps: latestValue(netOutMbpsMap),
-      updated_at: latestTimestampIso([cpuMap, memUsageMap, diskUsageMap, netInMbpsMap, netOutMbpsMap])
+      cpu_percent: latestValue(maps.cpu_percent),
+      memory_percent: latestValue(maps.memory_percent),
+      disk_percent: latestValue(maps.disk_percent),
+      network_ingress_mbps: latestValue(maps.network_ingress_mbps),
+      network_egress_mbps: latestValue(maps.network_egress_mbps),
+      updated_at: latestTimestampIso(Object.values(maps))
     };
 
     return res.json({
-      from: fromIso,
-      to: toIso,
+      from: new Date(fromMs).toISOString(),
+      to: new Date(toMs).toISOString(),
       lookback,
       interval,
       latest,
@@ -283,85 +214,95 @@ app.listen(PORT, () => {
   console.log(`Metrics backend listening on ${PORT}`);
 });
 
-async function listMeasurements(prefix, limit) {
-  const q = prefix
-    ? `SHOW MEASUREMENTS WITH MEASUREMENT =~ /^${escapeRegex(prefix)}.*/ LIMIT ${limit}`
-    : `SHOW MEASUREMENTS LIMIT ${limit}`;
-
-  const result = await influxQuery(q);
-  const values = result?.results?.[0]?.series?.[0]?.values || [];
-  return values.map((row) => row[0]).filter(Boolean).sort();
+async function listMetricNames() {
+  const payload = await prometheusGet('/api/v1/label/__name__/values');
+  const values = payload?.data || [];
+  return Array.isArray(values) ? values.filter(Boolean) : [];
 }
 
-function extractSeries(result) {
-  const rawSeries = result?.results?.[0]?.series || [];
-
-  return rawSeries.map((series) => {
-    const timeIndex = series.columns.indexOf('time');
-    const valueIndex = series.columns.indexOf('value');
-
-    const points = (series.values || [])
-      .map((row) => ({
-        time: timeIndex >= 0 ? row[timeIndex] : null,
-        value: valueIndex >= 0 ? row[valueIndex] : null
-      }))
-      .filter((point) => point.time !== null && point.value !== null);
+function extractSeriesFromInstant(payload) {
+  const result = payload?.data?.result || [];
+  return result.map((entry) => {
+    const [timeSec, valueText] = entry.value || [];
+    const time = Number(timeSec) * 1000;
+    const value = Number(valueText);
 
     return {
-      tags: series.tags || {},
-      points
+      tags: entry.metric || {},
+      points: Number.isFinite(time) && Number.isFinite(value) ? [{ time, value }] : []
     };
   });
 }
 
-async function influxQuery(query) {
-  const url = `${INFLUX_URL}/query?db=${encodeURIComponent(INFLUX_DB)}&epoch=ms&q=${encodeURIComponent(query)}`;
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json'
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`InfluxDB request failed with status ${response.status}`);
-  }
-
-  const payload = await response.json();
-  const resultError = payload?.results?.find((item) => item.error)?.error;
-
-  if (resultError) {
-    throw new Error(`InfluxDB query error: ${resultError}`);
-  }
-
-  return payload;
+function extractSeriesFromRange(payload) {
+  const result = payload?.data?.result || [];
+  return result.map((entry) => ({
+    tags: entry.metric || {},
+    points: (entry.values || [])
+      .map(([timeSec, valueText]) => ({
+        time: Number(timeSec) * 1000,
+        value: Number(valueText)
+      }))
+      .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value))
+  }));
 }
 
-async function queryValueSeries(query) {
-  const result = await influxQuery(query);
-  const rawSeries = result?.results?.[0]?.series || [];
-  const byTime = new Map();
+function mapFromRangePayload(payload) {
+  const result = payload?.data?.result || [];
+  const map = new Map();
 
-  for (const series of rawSeries) {
-    const timeIndex = series.columns.indexOf('time');
-    const valueIndex = series.columns.indexOf('value');
-    if (timeIndex < 0 || valueIndex < 0) {
-      continue;
-    }
-
-    for (const row of series.values || []) {
-      const time = Number(row[timeIndex]);
-      const value = Number(row[valueIndex]);
+  for (const series of result) {
+    for (const [timeSec, valueText] of series.values || []) {
+      const time = Number(timeSec) * 1000;
+      const value = Number(valueText);
       if (!Number.isFinite(time) || !Number.isFinite(value)) {
         continue;
       }
-      byTime.set(time, value);
+      map.set(time, (map.get(time) || 0) + value);
     }
   }
 
-  return Array.from(byTime.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([time, value]) => ({ time, value }));
+  return map;
+}
+
+async function prometheusQuery(query, timeMs) {
+  const params = { query };
+  if (timeMs !== undefined) {
+    params.time = (timeMs / 1000).toString();
+  }
+  return prometheusGet('/api/v1/query', params);
+}
+
+async function prometheusQueryRange(query, fromMs, toMs, stepSeconds) {
+  return prometheusGet('/api/v1/query_range', {
+    query,
+    start: (fromMs / 1000).toString(),
+    end: (toMs / 1000).toString(),
+    step: stepSeconds.toString()
+  });
+}
+
+async function prometheusGet(path, params = {}) {
+  const url = new URL(`${PROMETHEUS_URL}${path}`);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, String(value));
+  }
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json' }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Prometheus request failed with status ${response.status}`);
+  }
+
+  const payload = await response.json();
+  if (payload?.status !== 'success') {
+    throw new Error(payload?.error || 'Prometheus API error');
+  }
+
+  return payload;
 }
 
 function corsMiddleware(req, res, next) {
@@ -397,26 +338,8 @@ function validateMetric(metric) {
 
 function validateDuration(value, label) {
   if (!/^\d+(ms|s|m|h|d|w)$/.test(value)) {
-    throw new Error(`Invalid ${label}. Expected Influx duration like 30s, 5m, 1h.`);
+    throw new Error(`Invalid ${label}. Expected duration like 30s, 5m, 1h.`);
   }
-}
-
-function quoteIdent(value) {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
-}
-
-function clampInt(value, fallback, min, max) {
-  const parsed = Number.parseInt(value, 10);
-
-  if (Number.isNaN(parsed)) {
-    return fallback;
-  }
-
-  return Math.min(max, Math.max(min, parsed));
-}
-
-function escapeRegex(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function durationToMs(value) {
@@ -439,27 +362,12 @@ function durationToMs(value) {
   return amount * multipliers[unit];
 }
 
-function mapFromPoints(points, mapper = (value) => value) {
-  const map = new Map();
-  for (const point of points) {
-    const value = mapper(point.value);
-    if (Number.isFinite(value)) {
-      map.set(point.time, value);
-    }
+function clampInt(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    return fallback;
   }
-  return map;
-}
-
-function ratioUsageMap(totalMap, availableMap) {
-  const out = new Map();
-  for (const [time, total] of totalMap.entries()) {
-    const available = availableMap.get(time);
-    if (!Number.isFinite(total) || !Number.isFinite(available) || total <= 0) {
-      continue;
-    }
-    out.set(time, clampNumber((1 - available / total) * 100, 0, 100));
-  }
-  return out;
+  return Math.min(max, Math.max(min, parsed));
 }
 
 function sortedTimeUnion(maps) {
@@ -473,15 +381,15 @@ function sortedTimeUnion(maps) {
 }
 
 function latestValue(map) {
-  let time = null;
-  let value = null;
-  for (const [candidateTime, candidateValue] of map.entries()) {
-    if (time === null || candidateTime > time) {
-      time = candidateTime;
-      value = candidateValue;
+  let bestTime = null;
+  let bestValue = null;
+  for (const [time, value] of map.entries()) {
+    if (bestTime === null || time > bestTime) {
+      bestTime = time;
+      bestValue = value;
     }
   }
-  return numOrNull(value);
+  return numOrNull(bestValue);
 }
 
 function latestTimestampIso(maps) {
@@ -493,12 +401,7 @@ function latestTimestampIso(maps) {
       }
     }
   }
-
   return latest === null ? null : new Date(latest).toISOString();
-}
-
-function clampNumber(value, min, max) {
-  return Math.min(max, Math.max(min, value));
 }
 
 function numOrNull(value) {
@@ -544,6 +447,5 @@ async function mapWithConcurrency(items, concurrency, worker) {
 
   const size = Math.min(concurrency, items.length);
   await Promise.all(Array.from({ length: size }, () => runWorker()));
-
   return results;
 }

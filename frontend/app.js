@@ -8,12 +8,17 @@ const serverStatusEl = document.getElementById('serverStatus');
 const lastRefreshEl = document.getElementById('lastRefresh');
 const historyDateEl = document.getElementById('historyDate');
 const historyMessageEl = document.getElementById('historyMessage');
+const loadHistoryBtn = document.getElementById('loadHistory');
 
 const cpuValueEl = document.getElementById('cpuValue');
 const memoryValueEl = document.getElementById('memoryValue');
 const diskValueEl = document.getElementById('diskValue');
 const ingressValueEl = document.getElementById('ingressValue');
 const egressValueEl = document.getElementById('egressValue');
+const realtimePercentChartEl = document.getElementById('realtimePercentChart');
+const realtimeBandwidthChartEl = document.getElementById('realtimeBandwidthChart');
+const historyPercentChartEl = document.getElementById('historyPercentChart');
+const historyBandwidthChartEl = document.getElementById('historyBandwidthChart');
 
 let realtimePercentChart;
 let realtimeBandwidthChart;
@@ -23,13 +28,37 @@ let serverUp = false;
 
 const POLL_MS = 15000;
 
-document.getElementById('loadHistory').addEventListener('click', () => {
-  loadHistory().catch(() => {});
-});
+const domOk = [
+  serverStatusEl,
+  lastRefreshEl,
+  historyDateEl,
+  historyMessageEl,
+  loadHistoryBtn,
+  cpuValueEl,
+  memoryValueEl,
+  diskValueEl,
+  ingressValueEl,
+  egressValueEl,
+  realtimePercentChartEl,
+  realtimeBandwidthChartEl,
+  historyPercentChartEl,
+  historyBandwidthChartEl
+].every(Boolean);
 
-boot().catch((error) => {
-  setServerDown(error.message);
-});
+if (!domOk) {
+  console.error('Dashboard DOM mismatch. Hard refresh the page to load matching assets.');
+  if (serverStatusEl) {
+    setServerDown('frontend assets are out of sync, hard refresh required');
+  }
+} else {
+  loadHistoryBtn.addEventListener('click', () => {
+    loadHistory().catch(() => {});
+  });
+
+  boot().catch((error) => {
+    setServerDown(error.message);
+  });
+}
 
 async function boot() {
   historyDateEl.value = formatDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
@@ -76,12 +105,13 @@ function renderRealtimeCharts(series) {
   }
 
   realtimePercentChart = new Chart(document.getElementById('realtimePercentChart'), {
+  realtimePercentChart = new Chart(realtimePercentChartEl, {
     type: 'line',
     data: { datasets: percentData },
     options: chartOptions('Usage %', true)
   });
 
-  realtimeBandwidthChart = new Chart(document.getElementById('realtimeBandwidthChart'), {
+  realtimeBandwidthChart = new Chart(realtimeBandwidthChartEl, {
     type: 'line',
     data: { datasets: bandwidthData },
     options: chartOptions('Bandwidth (Mbps)', false)
@@ -150,13 +180,13 @@ function renderHistoryCharts(series) {
     historyBandwidthChart.destroy();
   }
 
-  historyPercentChart = new Chart(document.getElementById('historyPercentChart'), {
+  historyPercentChart = new Chart(historyPercentChartEl, {
     type: 'line',
     data: { datasets: percentData },
     options: chartOptions('Historical Usage %', true)
   });
 
-  historyBandwidthChart = new Chart(document.getElementById('historyBandwidthChart'), {
+  historyBandwidthChart = new Chart(historyBandwidthChartEl, {
     type: 'line',
     data: { datasets: bandwidthData },
     options: chartOptions('Historical Bandwidth (Mbps)', false)
