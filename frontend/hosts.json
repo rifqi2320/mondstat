@@ -3,6 +3,10 @@
     {
       "name": "Reefz Server",
       "apiUrl": "https://deployment-data-api.reefz.cc"
+    },
+    {
+      "name": "Empayer Cloud One",
+      "apiUrl": "https://iqi-1.noxira.cc"
     }
   ]
 }
