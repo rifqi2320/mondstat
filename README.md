@@ -55,6 +55,7 @@ Configure in compose via `ALLOWED_ORIGINS` and `ALLOWED_ORIGIN_SUFFIXES` if need
 - Host list is loaded from committed file: `frontend/hosts.json`
   - each host entry stores only: `name` and `apiUrl`
   - sidebar lets you switch active host/API in realtime
+- Time range selector: `1h`, `5h`, `12h`, `24h`, `3d`, `7d`, `15d`, `30d`
 - No metric search UI; dashboard is fixed to:
   - CPU usage %
   - Memory usage %
@@ -62,7 +63,8 @@ Configure in compose via `ALLOWED_ORIGINS` and `ALLOWED_ORIGIN_SUFFIXES` if need
   - Network ingress bandwidth (Mbps)
   - Network egress bandwidth (Mbps)
 - Realtime data is fetched from backend via `/api/dashboard/system` (source: Prometheus).
-- Historical data is fetched directly from GitHub raw JSON exports.
+- Historical data is fetched from GitHub raw JSON exports.
+  - for ranges above 24h, frontend fetches multiple daily export files and merges them.
 - If backend is inaccessible, UI shows `Server is down`.
 
 ## GitHub Pages deployment

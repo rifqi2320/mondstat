@@ -3,7 +3,22 @@
 const cfg = window.APP_CONFIG || {};
 const DEFAULT_API_BASE = (cfg.apiBaseUrl || 'https://deployment-data-api.reefz.cc').replace(/\/$/, '');
 const GITHUB_RAW_BASE = (cfg.githubRawBaseUrl || guessGithubRawBase() || '').replace(/\/$/, '');
+
 const HOST_STORAGE_KEY = 'dashboard.selectedHostApi';
+const RANGE_STORAGE_KEY = 'dashboard.selectedRange';
+const POLL_MS = 15000;
+const DEFAULT_RANGE = '1h';
+
+const RANGE_TO_INTERVAL = {
+  '1h': '30s',
+  '5h': '1m',
+  '12h': '2m',
+  '24h': '5m',
+  '3d': '15m',
+  '7d': '30m',
+  '15d': '1h',
+  '30d': '2h'
+};
 
 const serverStatusEl = document.getElementById('serverStatus');
 const lastRefreshEl = document.getElementById('lastRefresh');
@@ -12,6 +27,7 @@ const historyMessageEl = document.getElementById('historyMessage');
 const loadHistoryBtn = document.getElementById('loadHistory');
 const hostListEl = document.getElementById('hostList');
 const currentHostEl = document.getElementById('currentHost');
+const timeRangeEl = document.getElementById('timeRange');
 
 const cpuValueEl = document.getElementById('cpuValue');
 const memoryValueEl = document.getElementById('memoryValue');
@@ -27,12 +43,11 @@ let realtimePercentChart;
 let realtimeBandwidthChart;
 let historyPercentChart;
 let historyBandwidthChart;
-let serverUp = false;
 let hosts = [];
 let currentHostIndex = -1;
 let currentApiBase = DEFAULT_API_BASE;
-
-const POLL_MS = 15000;
+let currentRange = DEFAULT_RANGE;
+let pollingHandle;
 
 const domOk = [
   serverStatusEl,
@@ -42,6 +57,7 @@ const domOk = [
   loadHistoryBtn,
   hostListEl,
   currentHostEl,
+  timeRangeEl,
   cpuValueEl,
   memoryValueEl,
   diskValueEl,
@@ -63,6 +79,13 @@ if (!domOk) {
     loadHistory().catch(() => {});
   });
 
+  timeRangeEl.addEventListener('change', async () => {
+    currentRange = normalizeRange(timeRangeEl.value);
+    writeStoredRange(currentRange);
+    await loadRealtime();
+    await loadHistory();
+  });
+
   boot().catch((error) => {
     setServerDown(error.message);
   });
@@ -70,14 +93,32 @@ if (!domOk) {
 
 async function boot() {
   historyDateEl.value = formatDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
+  currentRange = normalizeRange(readStoredRange() || DEFAULT_RANGE);
+  timeRangeEl.value = currentRange;
 
+  initCharts();
   await initHosts();
   await loadRealtime();
   await loadHistory();
 
-  setInterval(async () => {
+  pollingHandle = setInterval(async () => {
     await loadRealtime();
   }, POLL_MS);
+}
+
+function initCharts() {
+  realtimePercentChart = createLineChart(realtimePercentChartEl, true);
+  realtimeBandwidthChart = createLineChart(realtimeBandwidthChartEl, false);
+  historyPercentChart = createLineChart(historyPercentChartEl, true);
+  historyBandwidthChart = createLineChart(historyBandwidthChartEl, false);
+}
+
+function createLineChart(canvasEl, isPercent) {
+  return new Chart(canvasEl, {
+    type: 'line',
+    data: { datasets: [] },
+    options: chartOptions(isPercent)
+  });
 }
 
 async function initHosts() {
@@ -106,11 +147,9 @@ async function loadHostsFromFile() {
     if (Array.isArray(payload)) {
       return payload;
     }
-
     if (Array.isArray(payload?.hosts)) {
       return payload.hosts;
     }
-
     return [];
   } catch (_error) {
     return [];
@@ -125,15 +164,7 @@ function normalizeHosts(items) {
     const name = typeof item?.name === 'string' ? item.name.trim() : '';
     const apiUrl = typeof item?.apiUrl === 'string' ? item.apiUrl.trim().replace(/\/$/, '') : '';
 
-    if (!name || !apiUrl) {
-      continue;
-    }
-
-    if (!isValidHttpUrl(apiUrl)) {
-      continue;
-    }
-
-    if (seen.has(apiUrl)) {
+    if (!name || !apiUrl || !isValidHttpUrl(apiUrl) || seen.has(apiUrl)) {
       continue;
     }
 
@@ -158,7 +189,7 @@ async function selectHost(index, shouldRefresh = true) {
   writeStoredHostApi(currentApiBase);
 
   renderHostList();
-  currentHostEl.textContent = `${hosts[index].name}`;
+  currentHostEl.textContent = hosts[index].name;
 
   if (shouldRefresh) {
     await loadRealtime();
@@ -184,11 +215,12 @@ function renderHostList() {
 
 async function loadRealtime() {
   try {
-    const payload = await apiGet('/api/dashboard/system?lookback=1h&interval=30s');
-    setServerUp();
+    const interval = intervalForRange(currentRange);
+    const payload = await apiGet(`/api/dashboard/system?lookback=${encodeURIComponent(currentRange)}&interval=${encodeURIComponent(interval)}`);
 
     renderLatestCards(payload.latest || {});
     renderRealtimeCharts(payload.series || []);
+    setServerUp();
     lastRefreshEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (error) {
     setServerDown(error.message);
@@ -207,24 +239,8 @@ function renderRealtimeCharts(series) {
   const percentData = buildPercentDatasets(series);
   const bandwidthData = buildBandwidthDatasets(series);
 
-  if (realtimePercentChart) {
-    realtimePercentChart.destroy();
-  }
-  if (realtimeBandwidthChart) {
-    realtimeBandwidthChart.destroy();
-  }
-
-  realtimePercentChart = new Chart(realtimePercentChartEl, {
-    type: 'line',
-    data: { datasets: percentData },
-    options: chartOptions(true)
-  });
-
-  realtimeBandwidthChart = new Chart(realtimeBandwidthChartEl, {
-    type: 'line',
-    data: { datasets: bandwidthData },
-    options: chartOptions(false)
-  });
+  updateChartDatasets(realtimePercentChart, percentData);
+  updateChartDatasets(realtimeBandwidthChart, bandwidthData);
 }
 
 async function loadHistory() {
@@ -239,52 +255,121 @@ async function loadHistory() {
     return;
   }
 
-  const url = `${GITHUB_RAW_BASE}/${date}.json`;
+  const rangeMs = durationToMs(currentRange);
+  const endMs = Date.parse(`${date}T23:59:59Z`);
+  const startMs = endMs - rangeMs + 1000;
+
+  if (!Number.isFinite(endMs) || !Number.isFinite(startMs)) {
+    historyMessageEl.textContent = 'Invalid date or range.';
+    return;
+  }
 
   try {
-    const response = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!response.ok) {
-      throw new Error(`History file not found (${response.status})`);
-    }
+    const dates = listDateStringsUtc(startMs, endMs);
+    const files = await Promise.all(dates.map((day) => loadHistoryFile(day)));
+    const available = files.filter(Boolean);
 
-    const payload = await response.json();
-    const rawResult = payload?.payload?.data?.result || [];
-    const derived = deriveSystemMetricsFromProm(rawResult);
-
-    if (!derived.series.length) {
-      historyMessageEl.textContent = `No usable historical data for ${date}.`;
+    if (!available.length) {
+      historyMessageEl.textContent = 'No historical export files found for selected range.';
+      updateChartDatasets(historyPercentChart, []);
+      updateChartDatasets(historyBandwidthChart, []);
       return;
     }
 
-    historyMessageEl.textContent = `Loaded ${derived.series.length} historical points from ${date}.`;
+    const merged = mergePromResults(
+      available.map((entry) => entry.result),
+      Math.floor(startMs / 1000),
+      Math.floor(endMs / 1000)
+    );
+
+    const derived = deriveSystemMetricsFromProm(merged);
+    if (!derived.series.length) {
+      historyMessageEl.textContent = 'No usable historical points in selected range.';
+      updateChartDatasets(historyPercentChart, []);
+      updateChartDatasets(historyBandwidthChart, []);
+      return;
+    }
+
+    historyMessageEl.textContent = `Loaded ${derived.series.length} points from ${available.length}/${dates.length} day file(s).`;
     renderHistoryCharts(derived.series);
   } catch (error) {
     historyMessageEl.textContent = `History load failed: ${error.message}`;
   }
 }
 
+async function loadHistoryFile(day) {
+  const url = `${GITHUB_RAW_BASE}/${day}.json`;
+
+  try {
+    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json();
+    const result = payload?.payload?.data?.result;
+    if (!Array.isArray(result)) {
+      return null;
+    }
+
+    return { day, result };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function mergePromResults(resultArrays, minTsSec, maxTsSec) {
+  const map = new Map();
+
+  for (const result of resultArrays) {
+    for (const series of result || []) {
+      const metric = series.metric || {};
+      const key = stableMetricKey(metric);
+
+      if (!map.has(key)) {
+        map.set(key, { metric, values: new Map() });
+      }
+
+      const bucket = map.get(key);
+      for (const pair of series.values || []) {
+        const ts = Number(pair[0]);
+        const value = String(pair[1]);
+
+        if (!Number.isFinite(ts) || ts < minTsSec || ts > maxTsSec) {
+          continue;
+        }
+
+        bucket.values.set(ts, value);
+      }
+    }
+  }
+
+  return Array.from(map.values()).map((entry) => ({
+    metric: entry.metric,
+    values: Array.from(entry.values.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([ts, value]) => [ts, value])
+  }));
+}
+
+function stableMetricKey(metric) {
+  return Object.keys(metric)
+    .sort()
+    .map((key) => `${key}=${metric[key]}`)
+    .join('|');
+}
+
 function renderHistoryCharts(series) {
   const percentData = buildPercentDatasets(series);
   const bandwidthData = buildBandwidthDatasets(series);
 
-  if (historyPercentChart) {
-    historyPercentChart.destroy();
-  }
-  if (historyBandwidthChart) {
-    historyBandwidthChart.destroy();
-  }
+  updateChartDatasets(historyPercentChart, percentData);
+  updateChartDatasets(historyBandwidthChart, bandwidthData);
+}
 
-  historyPercentChart = new Chart(historyPercentChartEl, {
-    type: 'line',
-    data: { datasets: percentData },
-    options: chartOptions(true)
-  });
-
-  historyBandwidthChart = new Chart(historyBandwidthChartEl, {
-    type: 'line',
-    data: { datasets: bandwidthData },
-    options: chartOptions(false)
-  });
+function updateChartDatasets(chart, datasets) {
+  chart.data.datasets = datasets;
+  chart.update('none');
 }
 
 function buildPercentDatasets(series) {
@@ -320,6 +405,7 @@ function chartOptions(isPercent) {
   return {
     responsive: true,
     maintainAspectRatio: true,
+    animation: false,
     plugins: {
       legend: { display: true, position: 'bottom' }
     },
@@ -329,7 +415,7 @@ function chartOptions(isPercent) {
         ticks: {
           color: '#526174',
           callback(value) {
-            return new Date(Number(value)).toLocaleTimeString();
+            return formatAxisTime(Number(value));
           }
         },
         grid: { color: '#edf2f7' }
@@ -347,6 +433,20 @@ function chartOptions(isPercent) {
       }
     }
   };
+}
+
+function formatAxisTime(ms) {
+  const date = new Date(ms);
+  if (!Number.isFinite(date.getTime())) {
+    return '';
+  }
+
+  const rangeMs = durationToMs(currentRange);
+  if (rangeMs > durationToMs('24h')) {
+    return `${pad2(date.getUTCMonth() + 1)}/${pad2(date.getUTCDate())} ${pad2(date.getUTCHours())}:00`;
+  }
+
+  return `${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}`;
 }
 
 function deriveSystemMetricsFromProm(result) {
@@ -528,18 +628,12 @@ async function apiGet(path) {
 }
 
 function setServerUp() {
-  if (serverUp) {
-    return;
-  }
-
-  serverUp = true;
   serverStatusEl.textContent = `Server is up (${activeHostName()})`;
   serverStatusEl.classList.remove('down');
   serverStatusEl.classList.add('up');
 }
 
 function setServerDown(reason) {
-  serverUp = false;
   serverStatusEl.textContent = `Server is down (${activeHostName()}: ${reason})`;
   serverStatusEl.classList.remove('up');
   serverStatusEl.classList.add('down');
@@ -547,6 +641,48 @@ function setServerDown(reason) {
 
 function activeHostName() {
   return currentHostIndex >= 0 && hosts[currentHostIndex] ? hosts[currentHostIndex].name : 'unknown host';
+}
+
+function normalizeRange(value) {
+  return Object.prototype.hasOwnProperty.call(RANGE_TO_INTERVAL, value) ? value : DEFAULT_RANGE;
+}
+
+function intervalForRange(range) {
+  return RANGE_TO_INTERVAL[normalizeRange(range)];
+}
+
+function durationToMs(value) {
+  const match = /^(\d+)(ms|s|m|h|d|w)$/.exec(String(value));
+  if (!match) {
+    return 0;
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2];
+  const multipliers = {
+    ms: 1,
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+    w: 7 * 24 * 60 * 60 * 1000
+  };
+
+  return amount * multipliers[unit];
+}
+
+function listDateStringsUtc(startMs, endMs) {
+  const start = new Date(startMs);
+  const end = new Date(endMs);
+
+  const cursor = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate());
+  const endDay = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+
+  const out = [];
+  for (let day = cursor; day <= endDay; day += 24 * 60 * 60 * 1000) {
+    out.push(formatDate(new Date(day)));
+  }
+  return out;
 }
 
 function formatPercent(value) {
@@ -572,10 +708,14 @@ function clamp(value, min, max) {
 }
 
 function formatDate(date) {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
+  const year = date.getUTCFullYear();
+  const month = `${date.getUTCMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getUTCDate()}`.padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function pad2(value) {
+  return `${value}`.padStart(2, '0');
 }
 
 function guessGithubRawBase() {
@@ -624,6 +764,22 @@ function readStoredHostApi() {
 function writeStoredHostApi(apiUrl) {
   try {
     localStorage.setItem(HOST_STORAGE_KEY, apiUrl);
+  } catch (_error) {
+    // ignore
+  }
+}
+
+function readStoredRange() {
+  try {
+    return localStorage.getItem(RANGE_STORAGE_KEY);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeStoredRange(range) {
+  try {
+    localStorage.setItem(RANGE_STORAGE_KEY, range);
   } catch (_error) {
     // ignore
   }
