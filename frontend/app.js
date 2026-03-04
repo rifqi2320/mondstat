@@ -1,14 +1,17 @@
 'use strict';
 
 const cfg = window.APP_CONFIG || {};
-const API_BASE = (cfg.apiBaseUrl || 'https://deployment-data-api.reefz.cc').replace(/\/$/, '');
+const DEFAULT_API_BASE = (cfg.apiBaseUrl || 'https://deployment-data-api.reefz.cc').replace(/\/$/, '');
 const GITHUB_RAW_BASE = (cfg.githubRawBaseUrl || guessGithubRawBase() || '').replace(/\/$/, '');
+const HOST_STORAGE_KEY = 'dashboard.selectedHostApi';
 
 const serverStatusEl = document.getElementById('serverStatus');
 const lastRefreshEl = document.getElementById('lastRefresh');
 const historyDateEl = document.getElementById('historyDate');
 const historyMessageEl = document.getElementById('historyMessage');
 const loadHistoryBtn = document.getElementById('loadHistory');
+const hostListEl = document.getElementById('hostList');
+const currentHostEl = document.getElementById('currentHost');
 
 const cpuValueEl = document.getElementById('cpuValue');
 const memoryValueEl = document.getElementById('memoryValue');
@@ -25,6 +28,9 @@ let realtimeBandwidthChart;
 let historyPercentChart;
 let historyBandwidthChart;
 let serverUp = false;
+let hosts = [];
+let currentHostIndex = -1;
+let currentApiBase = DEFAULT_API_BASE;
 
 const POLL_MS = 15000;
 
@@ -34,6 +40,8 @@ const domOk = [
   historyDateEl,
   historyMessageEl,
   loadHistoryBtn,
+  hostListEl,
+  currentHostEl,
   cpuValueEl,
   memoryValueEl,
   diskValueEl,
@@ -63,12 +71,115 @@ if (!domOk) {
 async function boot() {
   historyDateEl.value = formatDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
 
+  await initHosts();
   await loadRealtime();
   await loadHistory();
 
   setInterval(async () => {
     await loadRealtime();
   }, POLL_MS);
+}
+
+async function initHosts() {
+  const fromFile = await loadHostsFromFile();
+  hosts = normalizeHosts(fromFile);
+
+  if (!hosts.length) {
+    hosts = [{ name: 'Default', apiUrl: DEFAULT_API_BASE }];
+  }
+
+  const stored = readStoredHostApi();
+  const preferred = stored || DEFAULT_API_BASE;
+  const selected = findHostIndex(preferred);
+
+  await selectHost(selected >= 0 ? selected : 0, false);
+}
+
+async function loadHostsFromFile() {
+  try {
+    const response = await fetch('hosts.json', { cache: 'no-store', headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      return [];
+    }
+
+    const payload = await response.json();
+    if (Array.isArray(payload)) {
+      return payload;
+    }
+
+    if (Array.isArray(payload?.hosts)) {
+      return payload.hosts;
+    }
+
+    return [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function normalizeHosts(items) {
+  const out = [];
+  const seen = new Set();
+
+  for (const item of items || []) {
+    const name = typeof item?.name === 'string' ? item.name.trim() : '';
+    const apiUrl = typeof item?.apiUrl === 'string' ? item.apiUrl.trim().replace(/\/$/, '') : '';
+
+    if (!name || !apiUrl) {
+      continue;
+    }
+
+    if (!isValidHttpUrl(apiUrl)) {
+      continue;
+    }
+
+    if (seen.has(apiUrl)) {
+      continue;
+    }
+
+    seen.add(apiUrl);
+    out.push({ name, apiUrl });
+  }
+
+  return out;
+}
+
+function findHostIndex(apiUrl) {
+  return hosts.findIndex((host) => host.apiUrl === apiUrl);
+}
+
+async function selectHost(index, shouldRefresh = true) {
+  if (index < 0 || index >= hosts.length) {
+    return;
+  }
+
+  currentHostIndex = index;
+  currentApiBase = hosts[index].apiUrl;
+  writeStoredHostApi(currentApiBase);
+
+  renderHostList();
+  currentHostEl.textContent = `${hosts[index].name}`;
+
+  if (shouldRefresh) {
+    await loadRealtime();
+  }
+}
+
+function renderHostList() {
+  hostListEl.innerHTML = '';
+
+  for (let i = 0; i < hosts.length; i += 1) {
+    const host = hosts[i];
+    const button = document.createElement('button');
+    button.className = `host-item${i === currentHostIndex ? ' active' : ''}`;
+    button.innerHTML = `<span class="host-name">${escapeHtml(host.name)}</span><span class="host-url">${escapeHtml(host.apiUrl)}</span>`;
+    button.addEventListener('click', () => {
+      selectHost(i).catch((error) => {
+        setServerDown(error.message);
+      });
+    });
+    hostListEl.appendChild(button);
+  }
 }
 
 async function loadRealtime() {
@@ -99,22 +210,20 @@ function renderRealtimeCharts(series) {
   if (realtimePercentChart) {
     realtimePercentChart.destroy();
   }
-
   if (realtimeBandwidthChart) {
     realtimeBandwidthChart.destroy();
   }
 
-  realtimePercentChart = new Chart(document.getElementById('realtimePercentChart'), {
   realtimePercentChart = new Chart(realtimePercentChartEl, {
     type: 'line',
     data: { datasets: percentData },
-    options: chartOptions('Usage %', true)
+    options: chartOptions(true)
   });
 
   realtimeBandwidthChart = new Chart(realtimeBandwidthChartEl, {
     type: 'line',
     data: { datasets: bandwidthData },
-    options: chartOptions('Bandwidth (Mbps)', false)
+    options: chartOptions(false)
   });
 }
 
@@ -148,24 +257,10 @@ async function loadHistory() {
     }
 
     historyMessageEl.textContent = `Loaded ${derived.series.length} historical points from ${date}.`;
-
-    renderHistoryCards(derived.latest);
     renderHistoryCharts(derived.series);
   } catch (error) {
     historyMessageEl.textContent = `History load failed: ${error.message}`;
   }
-}
-
-function renderHistoryCards(latest) {
-  if (!latest) {
-    return;
-  }
-
-  cpuValueEl.textContent = formatPercent(latest.cpu_percent);
-  memoryValueEl.textContent = formatPercent(latest.memory_percent);
-  diskValueEl.textContent = formatPercent(latest.disk_percent);
-  ingressValueEl.textContent = formatMbps(latest.network_ingress_mbps);
-  egressValueEl.textContent = formatMbps(latest.network_egress_mbps);
 }
 
 function renderHistoryCharts(series) {
@@ -175,7 +270,6 @@ function renderHistoryCharts(series) {
   if (historyPercentChart) {
     historyPercentChart.destroy();
   }
-
   if (historyBandwidthChart) {
     historyBandwidthChart.destroy();
   }
@@ -183,13 +277,13 @@ function renderHistoryCharts(series) {
   historyPercentChart = new Chart(historyPercentChartEl, {
     type: 'line',
     data: { datasets: percentData },
-    options: chartOptions('Historical Usage %', true)
+    options: chartOptions(true)
   });
 
   historyBandwidthChart = new Chart(historyBandwidthChartEl, {
     type: 'line',
     data: { datasets: bandwidthData },
-    options: chartOptions('Historical Bandwidth (Mbps)', false)
+    options: chartOptions(false)
   });
 }
 
@@ -222,13 +316,12 @@ function createDataset(label, color, series, key) {
   };
 }
 
-function chartOptions(title, isPercent) {
+function chartOptions(isPercent) {
   return {
     responsive: true,
     maintainAspectRatio: true,
     plugins: {
-      legend: { display: true, position: 'bottom' },
-      title: { display: false, text: title }
+      legend: { display: true, position: 'bottom' }
     },
     scales: {
       x: {
@@ -303,10 +396,7 @@ function deriveSystemMetricsFromProm(result) {
     network_egress_mbps: numOrNull(netOutMbps.get(time))
   }));
 
-  return {
-    latest: series[series.length - 1] || null,
-    series
-  };
+  return { series };
 }
 
 function filterPromSeries(result, metricName, predicate = () => true) {
@@ -426,7 +516,11 @@ function unionSortedTimes(maps) {
 }
 
 async function apiGet(path) {
-  const response = await fetch(`${API_BASE}${path}`, { headers: { Accept: 'application/json' } });
+  if (!currentApiBase) {
+    throw new Error('no selected API host');
+  }
+
+  const response = await fetch(`${currentApiBase}${path}`, { headers: { Accept: 'application/json' } });
   if (!response.ok) {
     throw new Error(`API ${response.status}`);
   }
@@ -439,16 +533,20 @@ function setServerUp() {
   }
 
   serverUp = true;
-  serverStatusEl.textContent = 'Server is up';
+  serverStatusEl.textContent = `Server is up (${activeHostName()})`;
   serverStatusEl.classList.remove('down');
   serverStatusEl.classList.add('up');
 }
 
 function setServerDown(reason) {
   serverUp = false;
-  serverStatusEl.textContent = `Server is down (${reason})`;
+  serverStatusEl.textContent = `Server is down (${activeHostName()}: ${reason})`;
   serverStatusEl.classList.remove('up');
   serverStatusEl.classList.add('down');
+}
+
+function activeHostName() {
+  return currentHostIndex >= 0 && hosts[currentHostIndex] ? hosts[currentHostIndex].name : 'unknown host';
 }
 
 function formatPercent(value) {
@@ -495,4 +593,38 @@ function guessGithubRawBase() {
   }
 
   return `https://raw.githubusercontent.com/${owner}/${repo}/main/exports`;
+}
+
+function isValidHttpUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch (_error) {
+    return false;
+  }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function readStoredHostApi() {
+  try {
+    return localStorage.getItem(HOST_STORAGE_KEY);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeStoredHostApi(apiUrl) {
+  try {
+    localStorage.setItem(HOST_STORAGE_KEY, apiUrl);
+  } catch (_error) {
+    // ignore
+  }
 }

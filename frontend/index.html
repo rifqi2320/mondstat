@@ -14,57 +14,66 @@
 
     <header>
       <h1>System Metrics Dashboard</h1>
-      <p>CPU, Memory, Disk, and Network from backend realtime + GitHub daily history</p>
+      <p>CPU, Memory, Disk, and Network from selected host + GitHub historical data</p>
     </header>
 
     <main class="layout">
-      <section class="cards">
-        <article class="metric-card">
-          <h2>CPU Usage</h2>
-          <div id="cpuValue" class="value">--%</div>
-        </article>
+      <aside class="panel sidebar">
+        <h2>Hosts</h2>
+        <div id="currentHost" class="host-selected">-</div>
+        <div id="hostList" class="host-list"></div>
+        <div class="muted">Edit <code>frontend/hosts.json</code> to register hosts (name + apiUrl).</div>
+      </aside>
 
-        <article class="metric-card">
-          <h2>Memory Usage</h2>
-          <div id="memoryValue" class="value">--%</div>
-        </article>
+      <section class="content">
+        <section class="cards">
+          <article class="metric-card">
+            <h2>CPU Usage</h2>
+            <div id="cpuValue" class="value">--%</div>
+          </article>
 
-        <article class="metric-card">
-          <h2>Disk Usage</h2>
-          <div id="diskValue" class="value">--%</div>
-        </article>
+          <article class="metric-card">
+            <h2>Memory Usage</h2>
+            <div id="memoryValue" class="value">--%</div>
+          </article>
 
-        <article class="metric-card">
-          <h2>Ingress Bandwidth</h2>
-          <div id="ingressValue" class="value">-- Mbps</div>
-        </article>
+          <article class="metric-card">
+            <h2>Disk Usage</h2>
+            <div id="diskValue" class="value">--%</div>
+          </article>
 
-        <article class="metric-card">
-          <h2>Egress Bandwidth</h2>
-          <div id="egressValue" class="value">-- Mbps</div>
-        </article>
-      </section>
+          <article class="metric-card">
+            <h2>Ingress Bandwidth</h2>
+            <div id="ingressValue" class="value">-- Mbps</div>
+          </article>
 
-      <section class="panel">
-        <div class="row between">
-          <h2>Realtime (last 1 hour)</h2>
-          <div id="lastRefresh" class="muted">-</div>
-        </div>
-        <canvas id="realtimePercentChart"></canvas>
-        <canvas id="realtimeBandwidthChart"></canvas>
-      </section>
+          <article class="metric-card">
+            <h2>Egress Bandwidth</h2>
+            <div id="egressValue" class="value">-- Mbps</div>
+          </article>
+        </section>
 
-      <section class="panel">
-        <div class="row between wrap">
-          <h2>Historical (GitHub Raw)</h2>
-          <div class="row">
-            <input id="historyDate" type="date" />
-            <button id="loadHistory">Load History</button>
+        <section class="panel">
+          <div class="row between wrap">
+            <h2>Realtime (last 1 hour)</h2>
+            <div id="lastRefresh" class="muted">-</div>
           </div>
-        </div>
-        <canvas id="historyPercentChart"></canvas>
-        <canvas id="historyBandwidthChart"></canvas>
-        <div id="historyMessage" class="muted">Select date and load history.</div>
+          <canvas id="realtimePercentChart"></canvas>
+          <canvas id="realtimeBandwidthChart"></canvas>
+        </section>
+
+        <section class="panel">
+          <div class="row between wrap">
+            <h2>Historical (GitHub Raw)</h2>
+            <div class="row">
+              <input id="historyDate" type="date" />
+              <button id="loadHistory">Load History</button>
+            </div>
+          </div>
+          <canvas id="historyPercentChart"></canvas>
+          <canvas id="historyBandwidthChart"></canvas>
+          <div id="historyMessage" class="muted">Select date and load history.</div>
+        </section>
       </section>
     </main>
   </body>
