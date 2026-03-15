@@ -9,7 +9,7 @@ for var in "${required_vars[@]}"; do
   fi
 done
 
-: "${PROM_QUERY:={job=\"node-exporter\"}}"
+: "${PROM_QUERY:={job=~\"node-exporter|heartbeat-exporter\"}}"
 : "${EXPORT_STEP:=5m}"
 : "${WORK_DIR:=/data/repo}"
 : "${OUTPUT_DIR:=exports}"

@@ -2,6 +2,7 @@
 
 This stack provides:
 - `prometheus` scraping `node-exporter`
+- `heartbeat-exporter` probing `region1.v2.argotunnel.com:7844` and exposing Prometheus metrics
 - `daily-exporter` exporting previous UTC day data and pushing to a host-scoped data branch (`data/<source-slug>`)
 - `backend` API exposing Prometheus data over HTTP on `localhost:13001`
 - `frontend` Grafana-like dashboard on `localhost:13002`
@@ -27,6 +28,7 @@ Optional:
 - `PROMETHEUS_PORT` (defaults to `19090` to avoid `9090` conflicts)
 - `FRONTEND_API_BASE_URL` (fallback default if host list is unavailable)
 - `EXPORT_BRANCH` (defaults to `data/<source-slug>`)
+- `HEARTBEAT_TARGET_HOST`, `HEARTBEAT_TARGET_PORT`, `HEARTBEAT_INTERVAL_SECONDS`, `HEARTBEAT_TIMEOUT_SECONDS`
 
 ## Start
 
@@ -62,6 +64,7 @@ Configure in compose via `ALLOWED_ORIGINS` and `ALLOWED_ORIGIN_SUFFIXES` if need
   - CPU usage %
   - Memory usage %
   - Disk I/O usage %
+  - Network heartbeat availability %
   - Network ingress bandwidth (Mbps)
   - Network egress bandwidth (Mbps)
 - Realtime data is fetched from backend via `/api/dashboard/system` (source: Prometheus).

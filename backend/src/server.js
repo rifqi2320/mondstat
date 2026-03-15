@@ -160,6 +160,7 @@ app.get('/api/dashboard/system', async (req, res) => {
       memory_percent: '100 * (1 - (sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)))',
       disk_percent:
         '100 * max(rate(node_disk_io_time_seconds_total{device!~"^(loop|ram|fd|sr|dm-|md).*"}[1m]))',
+      network_availability_percent: '100 * avg(network_heartbeat_up)',
       network_ingress_mbps:
         `(sum(rate(node_network_receive_bytes_total{device!~"${networkDeviceExclude}"}[1m])) * 8) / 1e6`,
       network_egress_mbps:
@@ -181,6 +182,7 @@ app.get('/api/dashboard/system', async (req, res) => {
       cpu_percent: numOrNull(maps.cpu_percent.get(time)),
       memory_percent: numOrNull(maps.memory_percent.get(time)),
       disk_percent: numOrNull(maps.disk_percent.get(time)),
+      network_availability_percent: numOrNull(maps.network_availability_percent.get(time)),
       network_ingress_mbps: numOrNull(maps.network_ingress_mbps.get(time)),
       network_egress_mbps: numOrNull(maps.network_egress_mbps.get(time))
     }));
@@ -189,6 +191,7 @@ app.get('/api/dashboard/system', async (req, res) => {
       cpu_percent: latestValue(maps.cpu_percent),
       memory_percent: latestValue(maps.memory_percent),
       disk_percent: latestValue(maps.disk_percent),
+      network_availability_percent: latestValue(maps.network_availability_percent),
       network_ingress_mbps: latestValue(maps.network_ingress_mbps),
       network_egress_mbps: latestValue(maps.network_egress_mbps),
       updated_at: latestTimestampIso(Object.values(maps))

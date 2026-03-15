@@ -14,7 +14,7 @@
 
     <header>
       <h1>System Metrics Dashboard</h1>
-      <p>CPU, Memory, Disk, and Network from selected host + GitHub historical data</p>
+      <p>CPU, Memory, Disk, Network, and heartbeat availability from selected host + GitHub historical data</p>
     </header>
 
     <main class="layout">
@@ -40,6 +40,11 @@
           <article class="metric-card">
             <h2>Disk I/O Usage</h2>
             <div id="diskValue" class="value">--%</div>
+          </article>
+
+          <article class="metric-card">
+            <h2>Network Availability</h2>
+            <div id="availabilityValue" class="value">--%</div>
           </article>
 
           <article class="metric-card">
@@ -72,6 +77,7 @@
             </div>
           </div>
           <canvas id="realtimePercentChart"></canvas>
+          <canvas id="realtimeAvailabilityChart"></canvas>
           <canvas id="realtimeBandwidthChart"></canvas>
         </section>
 
@@ -84,6 +90,7 @@
             </div>
           </div>
           <canvas id="historyPercentChart"></canvas>
+          <canvas id="historyAvailabilityChart"></canvas>
           <canvas id="historyBandwidthChart"></canvas>
           <div id="historyMessage" class="muted">Select date and load history.</div>
         </section>

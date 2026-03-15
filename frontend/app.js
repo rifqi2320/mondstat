@@ -32,16 +32,21 @@ const timeRangeEl = document.getElementById('timeRange');
 const cpuValueEl = document.getElementById('cpuValue');
 const memoryValueEl = document.getElementById('memoryValue');
 const diskValueEl = document.getElementById('diskValue');
+const availabilityValueEl = document.getElementById('availabilityValue');
 const ingressValueEl = document.getElementById('ingressValue');
 const egressValueEl = document.getElementById('egressValue');
 const realtimePercentChartEl = document.getElementById('realtimePercentChart');
+const realtimeAvailabilityChartEl = document.getElementById('realtimeAvailabilityChart');
 const realtimeBandwidthChartEl = document.getElementById('realtimeBandwidthChart');
 const historyPercentChartEl = document.getElementById('historyPercentChart');
+const historyAvailabilityChartEl = document.getElementById('historyAvailabilityChart');
 const historyBandwidthChartEl = document.getElementById('historyBandwidthChart');
 
 let realtimePercentChart;
+let realtimeAvailabilityChart;
 let realtimeBandwidthChart;
 let historyPercentChart;
+let historyAvailabilityChart;
 let historyBandwidthChart;
 let hosts = [];
 let currentHostIndex = -1;
@@ -61,11 +66,14 @@ const domOk = [
   cpuValueEl,
   memoryValueEl,
   diskValueEl,
+  availabilityValueEl,
   ingressValueEl,
   egressValueEl,
   realtimePercentChartEl,
+  realtimeAvailabilityChartEl,
   realtimeBandwidthChartEl,
   historyPercentChartEl,
+  historyAvailabilityChartEl,
   historyBandwidthChartEl
 ].every(Boolean);
 
@@ -108,8 +116,10 @@ async function boot() {
 
 function initCharts() {
   realtimePercentChart = createLineChart(realtimePercentChartEl, true);
+  realtimeAvailabilityChart = createLineChart(realtimeAvailabilityChartEl, true);
   realtimeBandwidthChart = createLineChart(realtimeBandwidthChartEl, false);
   historyPercentChart = createLineChart(historyPercentChartEl, true);
+  historyAvailabilityChart = createLineChart(historyAvailabilityChartEl, true);
   historyBandwidthChart = createLineChart(historyBandwidthChartEl, false);
 }
 
@@ -231,15 +241,18 @@ function renderLatestCards(latest) {
   cpuValueEl.textContent = formatPercent(latest.cpu_percent);
   memoryValueEl.textContent = formatPercent(latest.memory_percent);
   diskValueEl.textContent = formatPercent(latest.disk_percent);
+  availabilityValueEl.textContent = formatPercent(latest.network_availability_percent);
   ingressValueEl.textContent = formatMbps(latest.network_ingress_mbps);
   egressValueEl.textContent = formatMbps(latest.network_egress_mbps);
 }
 
 function renderRealtimeCharts(series) {
   const percentData = buildPercentDatasets(series);
+  const availabilityData = buildAvailabilityDatasets(series);
   const bandwidthData = buildBandwidthDatasets(series);
 
   updateChartDatasets(realtimePercentChart, percentData);
+  updateChartDatasets(realtimeAvailabilityChart, availabilityData);
   updateChartDatasets(realtimeBandwidthChart, bandwidthData);
 }
 
@@ -273,6 +286,7 @@ async function loadHistory() {
     if (!available.length) {
       historyMessageEl.textContent = 'No historical export files found for selected range.';
       updateChartDatasets(historyPercentChart, []);
+      updateChartDatasets(historyAvailabilityChart, []);
       updateChartDatasets(historyBandwidthChart, []);
       return;
     }
@@ -287,6 +301,7 @@ async function loadHistory() {
     if (!derived.series.length) {
       historyMessageEl.textContent = 'No usable historical points in selected range.';
       updateChartDatasets(historyPercentChart, []);
+      updateChartDatasets(historyAvailabilityChart, []);
       updateChartDatasets(historyBandwidthChart, []);
       return;
     }
@@ -371,9 +386,11 @@ function stableMetricKey(metric) {
 
 function renderHistoryCharts(series) {
   const percentData = buildPercentDatasets(series);
+  const availabilityData = buildAvailabilityDatasets(series);
   const bandwidthData = buildBandwidthDatasets(series);
 
   updateChartDatasets(historyPercentChart, percentData);
+  updateChartDatasets(historyAvailabilityChart, availabilityData);
   updateChartDatasets(historyBandwidthChart, bandwidthData);
 }
 
@@ -388,6 +405,10 @@ function buildPercentDatasets(series) {
     createDataset('Memory %', '#ef476f', series, 'memory_percent'),
     createDataset('Disk I/O %', '#ff9f1c', series, 'disk_percent')
   ];
+}
+
+function buildAvailabilityDatasets(series) {
+  return [createDataset('Heartbeat %', '#2b9348', series, 'network_availability_percent')];
 }
 
 function buildBandwidthDatasets(series) {
@@ -468,7 +489,7 @@ function deriveSystemMetricsFromProm(result) {
     'node_disk_io_time_seconds_total',
     (labels) => !/^(loop|ram|fd|sr|dm-|md)/.test(labels.device || '')
   );
-
+  const heartbeatUp = filterPromSeries(result, 'network_heartbeat_up');
   const netFilter = (labels) => !/^(lo|veth.*|docker.*|br-.*|cni.*)$/.test(labels.device || '');
   const netIn = filterPromSeries(result, 'node_network_receive_bytes_total', netFilter);
   const netOut = filterPromSeries(result, 'node_network_transmit_bytes_total', netFilter);
@@ -481,18 +502,20 @@ function deriveSystemMetricsFromProm(result) {
   const memUsageMap = ratioUsageMap(memTotalMap, memAvailMap);
   const diskBusyRateMax = counterRateMaxByTime(diskBusy);
   const diskBusyMap = mapValues(diskBusyRateMax, (rate) => clamp(rate * 100, 0, 100));
+  const heartbeatMap = mapValues(gaugeAverageByTime(heartbeatUp), (value) => clamp(value * 100, 0, 100));
 
   const netInBps = counterRateSumByTime(netIn);
   const netOutBps = counterRateSumByTime(netOut);
   const netInMbps = mapValues(netInBps, (bps) => (bps * 8) / 1_000_000);
   const netOutMbps = mapValues(netOutBps, (bps) => (bps * 8) / 1_000_000);
 
-  const times = unionSortedTimes([cpuMap, memUsageMap, diskBusyMap, netInMbps, netOutMbps]);
+  const times = unionSortedTimes([cpuMap, memUsageMap, diskBusyMap, heartbeatMap, netInMbps, netOutMbps]);
   const series = times.map((time) => ({
     time,
     cpu_percent: numOrNull(cpuMap.get(time)),
     memory_percent: numOrNull(memUsageMap.get(time)),
     disk_percent: numOrNull(diskBusyMap.get(time)),
+    network_availability_percent: numOrNull(heartbeatMap.get(time)),
     network_ingress_mbps: numOrNull(netInMbps.get(time)),
     network_egress_mbps: numOrNull(netOutMbps.get(time))
   }));
@@ -517,6 +540,31 @@ function gaugeSumByTime(seriesList) {
         continue;
       }
       out.set(time, (out.get(time) || 0) + value);
+    }
+  }
+  return out;
+}
+
+function gaugeAverageByTime(seriesList) {
+  const accum = new Map();
+  for (const entry of seriesList) {
+    for (const pair of entry.values || []) {
+      const time = Number(pair[0]) * 1000;
+      const value = Number(pair[1]);
+      if (!Number.isFinite(time) || !Number.isFinite(value)) {
+        continue;
+      }
+      const cell = accum.get(time) || { sum: 0, count: 0 };
+      cell.sum += value;
+      cell.count += 1;
+      accum.set(time, cell);
+    }
+  }
+
+  const out = new Map();
+  for (const [time, cell] of accum.entries()) {
+    if (cell.count > 0) {
+      out.set(time, cell.sum / cell.count);
     }
   }
   return out;

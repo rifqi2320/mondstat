@@ -12,3 +12,8 @@ scrape_configs:
     static_configs:
       - targets:
           - node-exporter:9100
+
+  - job_name: heartbeat-exporter
+    static_configs:
+      - targets:
+          - heartbeat-exporter:9850

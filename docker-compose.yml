@@ -29,6 +29,18 @@ services:
     ports:
       - "9100:9100"
 
+  heartbeat-exporter:
+    build:
+      context: ./heartbeat-exporter
+    container_name: heartbeat-exporter
+    restart: unless-stopped
+    environment:
+      PORT: 9850
+      TARGET_HOST: ${HEARTBEAT_TARGET_HOST:-region1.v2.argotunnel.com}
+      TARGET_PORT: ${HEARTBEAT_TARGET_PORT:-7844}
+      PROBE_INTERVAL_SECONDS: ${HEARTBEAT_INTERVAL_SECONDS:-15}
+      NC_TIMEOUT_SECONDS: ${HEARTBEAT_TIMEOUT_SECONDS:-5}
+
   daily-exporter:
     build:
       context: ./daily-exporter
@@ -39,7 +51,7 @@ services:
     environment:
       TZ: UTC
       PROMETHEUS_URL: http://prometheus:9090
-      PROM_QUERY: '{job="node-exporter"}'
+      PROM_QUERY: '{job=~"node-exporter|heartbeat-exporter"}'
       EXPORT_STEP: 5m
       EXPORT_CRON: "0 0 * * *"
       RUN_ON_STARTUP: "true"
