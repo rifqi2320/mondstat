@@ -100,7 +100,7 @@ if (!domOk) {
 }
 
 async function boot() {
-  historyDateEl.value = formatDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
+  historyDateEl.value = formatLocalDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
   currentRange = normalizeRange(readStoredRange() || DEFAULT_RANGE);
   timeRangeEl.value = currentRange;
 
@@ -269,7 +269,7 @@ async function loadHistory() {
   }
 
   const rangeMs = durationToMs(currentRange);
-  const endMs = Date.parse(`${date}T23:59:59Z`);
+  const endMs = parseLocalDateEndMs(date);
   const startMs = endMs - rangeMs + 1000;
 
   if (!Number.isFinite(endMs) || !Number.isFinite(startMs)) {
@@ -474,10 +474,10 @@ function formatAxisTime(ms) {
 
   const rangeMs = durationToMs(currentRange);
   if (rangeMs > durationToMs('24h')) {
-    return `${pad2(date.getUTCMonth() + 1)}/${pad2(date.getUTCDate())} ${pad2(date.getUTCHours())}:00`;
+    return `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())} ${pad2(date.getHours())}:00`;
   }
 
-  return `${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}`;
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
 function deriveSystemMetricsFromProm(result) {
@@ -757,7 +757,7 @@ function listDateStringsUtc(startMs, endMs) {
 
   const out = [];
   for (let day = cursor; day <= endDay; day += 24 * 60 * 60 * 1000) {
-    out.push(formatDate(new Date(day)));
+    out.push(formatUtcDate(new Date(day)));
   }
   return out;
 }
@@ -784,11 +784,30 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function formatDate(date) {
+function formatLocalDate(date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatUtcDate(date) {
   const year = date.getUTCFullYear();
   const month = `${date.getUTCMonth() + 1}`.padStart(2, '0');
   const day = `${date.getUTCDate()}`.padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function parseLocalDateEndMs(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
+  if (!match) {
+    return NaN;
+  }
+
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  return new Date(year, monthIndex, day, 23, 59, 59, 999).getTime();
 }
 
 function pad2(value) {
