@@ -13,7 +13,6 @@ done
 : "${EXPORT_STEP:=5m}"
 : "${WORK_DIR:=/data/repo}"
 : "${OUTPUT_DIR:=exports}"
-: "${EXPORT_BRANCH:=main}"
 : "${SOURCE_NAME:=unknown-source}"
 : "${GIT_AUTHOR_NAME:=prometheus-bot}"
 : "${GIT_AUTHOR_EMAIL:=prometheus-bot@example.com}"
@@ -34,6 +33,13 @@ if [[ "$(jq -r '.status' "${tmp_result}")" != "success" ]]; then
   exit 1
 fi
 
+source_slug="$(printf '%s' "${SOURCE_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+if [[ -z "${source_slug}" ]]; then
+  source_slug="unknown-source"
+fi
+
+: "${EXPORT_BRANCH:=data/${source_slug}}"
+
 case "${GITHUB_REPO}" in
   https://github.com/*)
     auth_repo_url="https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@${GITHUB_REPO#https://}"
@@ -50,21 +56,35 @@ case "${GITHUB_REPO}" in
     ;;
 esac
 
+default_branch="$(git ls-remote --symref "${auth_repo_url}" HEAD | awk '/^ref:/ {sub("refs/heads/", "", $2); print $2; exit}')"
+if [[ -z "${default_branch}" ]]; then
+  default_branch="main"
+fi
+
+branch_exists_remote=0
+if git ls-remote --exit-code --heads "${auth_repo_url}" "${EXPORT_BRANCH}" >/dev/null 2>&1; then
+  branch_exists_remote=1
+fi
+
 if [[ ! -d "${WORK_DIR}/.git" ]]; then
   rm -rf "${WORK_DIR}"
-  git clone --branch "${EXPORT_BRANCH}" "${auth_repo_url}" "${WORK_DIR}"
+  git clone --branch "${default_branch}" "${auth_repo_url}" "${WORK_DIR}"
 else
   git -C "${WORK_DIR}" remote set-url origin "${auth_repo_url}"
+  git -C "${WORK_DIR}" fetch origin
+  git -C "${WORK_DIR}" checkout "${default_branch}"
+  git -C "${WORK_DIR}" pull --ff-only origin "${default_branch}"
+fi
+
+if [[ "${branch_exists_remote}" -eq 1 ]]; then
   git -C "${WORK_DIR}" fetch origin "${EXPORT_BRANCH}"
   git -C "${WORK_DIR}" checkout "${EXPORT_BRANCH}"
   git -C "${WORK_DIR}" pull --ff-only origin "${EXPORT_BRANCH}"
+else
+  git -C "${WORK_DIR}" checkout -B "${EXPORT_BRANCH}"
 fi
 
 mkdir -p "${WORK_DIR}/${OUTPUT_DIR}"
-source_slug="$(printf '%s' "${SOURCE_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
-if [[ -z "${source_slug}" ]]; then
-  source_slug="unknown-source"
-fi
 
 output_name="${export_day}--${source_slug}.json"
 output_file="${WORK_DIR}/${OUTPUT_DIR}/${output_name}"

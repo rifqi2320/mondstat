@@ -2,7 +2,7 @@
 
 This stack provides:
 - `prometheus` scraping `node-exporter`
-- `daily-exporter` exporting previous UTC day data and pushing to GitHub (`exports/YYYY-MM-DD--<source-slug>.json`)
+- `daily-exporter` exporting previous UTC day data and pushing to a host-scoped data branch (`data/<source-slug>`)
 - `backend` API exposing Prometheus data over HTTP on `localhost:13001`
 - `frontend` Grafana-like dashboard on `localhost:13002`
 
@@ -21,11 +21,12 @@ Copy `.env.example` to `.env` and fill required values:
 - `GITHUB_USERNAME`
 - `GITHUB_TOKEN`
 - `SOURCE_NAME` (human-readable host/source name, used in export filename slug)
-- `FRONTEND_GITHUB_RAW_BASE_URL` (example: `https://raw.githubusercontent.com/<owner>/<repo>/main/exports`)
+- `FRONTEND_GITHUB_RAW_BASE_URL` (example: `https://raw.githubusercontent.com/<owner>/<repo>/data/<source-slug>/exports`)
 
 Optional:
 - `PROMETHEUS_PORT` (defaults to `19090` to avoid `9090` conflicts)
 - `FRONTEND_API_BASE_URL` (fallback default if host list is unavailable)
+- `EXPORT_BRANCH` (defaults to `data/<source-slug>`)
 
 ## Start
 
@@ -93,9 +94,11 @@ Configure in compose via `ALLOWED_ORIGINS` and `ALLOWED_ORIGIN_SUFFIXES` if need
    - `name`: readable host name shown in sidebar
    - `apiUrl`: backend URL for that host
 3. On that host deployment, set `SOURCE_NAME` to the same readable name.
-4. `daily-exporter` will write files as:
+4. `daily-exporter` will push by default to branch:
+   - `data/<source-slug>`
+5. `daily-exporter` will write files as:
    - `exports/YYYY-MM-DD--<source-slug>.json`
-5. Slug rule:
+6. Slug rule:
    - lowercase, non-alphanumeric replaced by `-`, trimmed (`Reefz Server` -> `reefz-server`)
 
 ## GitHub Pages deployment
@@ -112,4 +115,5 @@ Steps:
 
 Notes:
 - Frontend API default is `https://deployment-data-api.reefz.cc`.
+- Set `FRONTEND_GITHUB_RAW_BASE_URL` to the data branch raw path, for example `https://raw.githubusercontent.com/<owner>/<repo>/data/<source-slug>/exports`.
 - If `FRONTEND_GITHUB_RAW_BASE_URL` is empty, frontend auto-derives raw history URL from GitHub Pages URL.
