@@ -45,7 +45,7 @@ services:
       RUN_ON_STARTUP: "true"
       WORK_DIR: /data/repo
       OUTPUT_DIR: exports
-      EXPORT_BRANCH: main
+      EXPORT_BRANCH: ${EXPORT_BRANCH:-}
       SOURCE_NAME: ${SOURCE_NAME:-Reefz Server}
       GIT_AUTHOR_NAME: prometheus-bot
       GIT_AUTHOR_EMAIL: prometheus-bot@example.com
@@ -82,7 +82,7 @@ services:
       - backend
     environment:
       FRONTEND_API_BASE_URL: ${FRONTEND_API_BASE_URL:-https://deployment-data-api.reefz.cc}
-      FRONTEND_GITHUB_RAW_BASE_URL: ${FRONTEND_GITHUB_RAW_BASE_URL}
+      FRONTEND_GITHUB_RAW_BASE_URL: ${FRONTEND_GITHUB_RAW_BASE_URL:-https://raw.githubusercontent.com/rifqi2320/mondstat/data/reefz-server/exports}
       FRONTEND_DEFAULT_PREFIX: node_
     ports:
       - "13002:80"
