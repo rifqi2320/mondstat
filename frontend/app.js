@@ -426,9 +426,11 @@ function createDataset(label, color, series, key) {
     borderWidth: 2,
     tension: 0.2,
     pointRadius: 0,
-    data: series
-      .filter((row) => Number.isFinite(row[key]))
-      .map((row) => ({ x: Number(row.time), y: Number(row[key]) }))
+    spanGaps: false,
+    data: series.map((row) => ({
+      x: Number(row.time),
+      y: Number.isFinite(row[key]) ? Number(row[key]) : null
+    }))
   };
 }
 
